@@ -1,0 +1,36 @@
+{
+  "config": {
+    "graph": {
+      "type": "barabasi_albert",
+      "n": 80,
+      "m": 3,
+      "seed": 99
+    },
+    "thresholds": {
+      "type": "normal",
+      "deg_mean": 0.3,
+      "deg_std": 0.08,
+      "fail_mean": 0.65,
+      "fail_std": 0.1
+    },
+    "seed": 99,
+    "propagation_mode": "stochastic",
+    "stochastic_k": 8.0,
+    "monte_carlo_trials": 40,
+    "sensitivity_analysis": true,
+    "sensitivity_config": {
+      "perturbation_values": [
+        -0.2,
+        -0.1,
+        -0.05,
+        0.0,
+        0.05,
+        0.1,
+        0.2
+      ],
+      "max_seed_nodes": 10,
+      "stochastic_trials": 15
+    }
+  },
+  "sha256": "74a59a83815d399603c265f1b19258c95dd77c259cba703a80f1e3659bcc8ec3"
+}

@@ -1,0 +1,22 @@
+{
+  "mode": "deterministic",
+  "n_nodes": 100,
+  "elapsed_seconds": 0.008645473004435189,
+  "fragility_index": {
+    "mean": 2.04,
+    "std": 0.9789790600416334,
+    "min": 1.0,
+    "max": 5.0,
+    "median": 2.0,
+    "p90": 3.0
+  },
+  "full_cascade": {
+    "n_total": 100,
+    "n_degraded": 0,
+    "n_failed": 100,
+    "n_affected": 100,
+    "frac_degraded": 0.0,
+    "frac_failed": 1.0,
+    "frac_affected": 1.0
+  }
+}

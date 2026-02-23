@@ -1,0 +1,12 @@
+metric,value
+mode,deterministic
+n_nodes,150
+elapsed_fragility_s,0.0192
+fi_mean,2.0733
+fi_std,1.6496
+fi_min,1.0
+fi_median,2.0
+fi_p90,4.0
+fi_max,14.0
+full_cascade_n_affected,150
+full_cascade_frac_affected,1.0

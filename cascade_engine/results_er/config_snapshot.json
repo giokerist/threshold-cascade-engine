@@ -1,0 +1,20 @@
+{
+  "config": {
+    "graph": {
+      "type": "erdos_renyi",
+      "n": 100,
+      "p": 0.08,
+      "seed": 2024
+    },
+    "thresholds": {
+      "type": "uniform",
+      "deg_low": 0.1,
+      "deg_high": 0.4,
+      "fail_low": 0.5,
+      "fail_high": 0.9
+    },
+    "seed": 2024,
+    "propagation_mode": "deterministic"
+  },
+  "sha256": "9cc80bd20d3795414f4a84f1b6e6baaa09ac3b8017a2d6bc42ef2ce5aae7b5e6"
+}
