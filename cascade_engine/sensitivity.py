@@ -147,7 +147,7 @@ def threshold_sensitivity(
             S0[seed_node] = 2  # STATE_FAILED
 
             if mode == "deterministic":
-                final_state, t_stable, _ = run_until_stable(
+                final_state, t_stable, _, _ = run_until_stable(
                     S0, A, theta_deg_p, theta_fail_p
                 )
                 affected = int(np.sum(final_state >= STATE_DEGRADED))
@@ -175,7 +175,7 @@ def threshold_sensitivity(
                     )
                     trial_rng = default_rng(trial_seed)
 
-                    final_state, t_stable, _ = run_until_stable_stochastic(
+                    final_state, t_stable, _, _ = run_until_stable_stochastic(
                         S0, A, theta_deg_p, theta_fail_p,
                         k=stochastic_k, rng=trial_rng,
                     )
