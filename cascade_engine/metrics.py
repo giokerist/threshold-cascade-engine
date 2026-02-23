@@ -9,7 +9,7 @@ Tier 2 additions
 * ``rmse``                  – RMSE between predicted and observed vectors.
 * ``mape``                  – Mean absolute percentage error.
 * ``spearman_correlation``  – Spearman rank correlation via scipy.stats.
-* ``confidence_interval``   – General CI utility (re-exported from monte_carlo).
+* ``confidence_interval``   – General CI utility (t-distribution), consistent with monte_carlo.
 """
 
 from __future__ import annotations
@@ -67,14 +67,14 @@ def time_to_stability(history: np.ndarray) -> int:
 
     Parameters
     ----------
-    history : np.ndarray, shape (T, n)
+    history : np.ndarray, shape (T+1, n)
         Full state history as returned by ``run_until_stable``.  Row 0 is
         the initial state; subsequent rows are post-step states.
 
     Returns
     -------
     int
-        Number of steps taken (= T - 1).
+        Number of steps taken (= T).
     """
     return int(history.shape[0]) - 1
 
