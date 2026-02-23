@@ -37,7 +37,7 @@ class TestMonotonicity(unittest.TestCase):
         np.fill_diagonal(A, 0)
         S0 = rng.integers(0, 3, size=n, dtype=np.int32)
         td, tf = uniform_thresholds(n, 0.2, 0.6)
-        _, _, history = run_until_stable(S0, A, td, tf)
+        _, _, history, _ = run_until_stable(S0, A, td, tf)
         for t in range(history.shape[0] - 1):
             self.assertTrue(np.all(history[t+1] >= history[t]))
 
@@ -49,7 +49,7 @@ class TestMonotonicity(unittest.TestCase):
         td, tf = uniform_thresholds(n, 0.25, 0.5)
         for seed in range(20):
             S0 = np.random.default_rng(seed).integers(0, 3, size=n, dtype=np.int32)
-            _, _, history = run_until_stable(S0, A, td, tf)
+            _, _, history, _ = run_until_stable(S0, A, td, tf)
             for t in range(history.shape[0] - 1):
                 self.assertTrue(np.all(history[t+1] >= history[t]))
 
@@ -73,7 +73,7 @@ class TestConvergenceBound(unittest.TestCase):
         td, tf = uniform_thresholds(n, 0.3, 0.6)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        _, steps, history = run_until_stable(S0, A, td, tf)
+        _, steps, history, _ = run_until_stable(S0, A, td, tf)
         self.assertLessEqual(steps, 2 * n)
         self.assertEqual(history.shape[0] - 1, steps)
 
@@ -83,7 +83,7 @@ class TestConvergenceBound(unittest.TestCase):
         td, tf = uniform_thresholds(n, 0.3, 0.7)
         S0 = np.zeros(n, dtype=np.int32)
         S0[5] = STATE_FAILED
-        _, steps, _ = run_until_stable(S0, A, td, tf)
+        _, steps, _, _ = run_until_stable(S0, A, td, tf)
         self.assertEqual(steps, 0)
 
     def test_max_steps_terminates(self):
@@ -94,7 +94,7 @@ class TestConvergenceBound(unittest.TestCase):
         td, tf = uniform_thresholds(n, 0.1, 0.2)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        _, steps, _ = run_until_stable(S0, A, td, tf, max_steps=1)
+        _, steps, _, _ = run_until_stable(S0, A, td, tf, max_steps=1)
         self.assertLessEqual(steps, 1)
 
     def test_already_stable_zero_steps(self):
@@ -102,7 +102,7 @@ class TestConvergenceBound(unittest.TestCase):
         A = np.zeros((n, n), dtype=np.uint8)
         td, tf = uniform_thresholds(n, 0.5, 0.9)
         S0 = np.array([0, 1, 2, 0, 1], dtype=np.int32)
-        _, steps, history = run_until_stable(S0, A, td, tf)
+        _, steps, history, _ = run_until_stable(S0, A, td, tf)
         self.assertEqual(steps, 0)
         np.testing.assert_array_equal(history[0], S0)
 
@@ -117,7 +117,7 @@ class TestChainGraph(unittest.TestCase):
         A = self._chain(n)
         td = np.zeros(n); tf = np.zeros(n)
         S0 = np.zeros(n, dtype=np.int32); S0[0] = STATE_FAILED
-        final, _, _ = run_until_stable(S0, A, td, tf)
+        final, _, _, _ = run_until_stable(S0, A, td, tf)
         self.assertTrue(np.all(final == STATE_FAILED), f"Got {final}")
 
     def test_no_propagation_unreachable_threshold(self):
@@ -125,7 +125,7 @@ class TestChainGraph(unittest.TestCase):
         A = self._chain(n)
         td = np.full(n, 1.1); tf = np.full(n, 1.1)
         S0 = np.zeros(n, dtype=np.int32); S0[0] = STATE_FAILED
-        final, steps, _ = run_until_stable(S0, A, td, tf)
+        final, steps, _, _ = run_until_stable(S0, A, td, tf)
         self.assertEqual(final[0], STATE_FAILED)
         for i in range(1, n):
             self.assertEqual(final[i], STATE_OPERATIONAL)
@@ -137,7 +137,7 @@ class TestChainGraph(unittest.TestCase):
         A = self._chain(n)
         td = np.full(n, 0.5); tf = np.full(n, 0.5)
         S0 = np.zeros(n, dtype=np.int32); S0[0] = STATE_FAILED
-        final, steps, _ = run_until_stable(S0, A, td, tf)
+        final, steps, _, _ = run_until_stable(S0, A, td, tf)
         self.assertTrue(np.all(final == STATE_FAILED))
         self.assertEqual(steps, n - 1)
 
@@ -152,7 +152,7 @@ class TestChainGraph(unittest.TestCase):
         A = self._chain(n)
         td = np.full(n, 0.5); tf = np.full(n, 1.5)
         S0 = np.zeros(n, dtype=np.int32); S0[0] = STATE_FAILED
-        final, _, _ = run_until_stable(S0, A, td, tf)
+        final, _, _, _ = run_until_stable(S0, A, td, tf)
         self.assertEqual(final[0], STATE_FAILED)
         # Only node 1 has a failed in-neighbor (node 0 is failed -> F_1=1.0>=0.5)
         self.assertEqual(final[1], STATE_DEGRADED)
@@ -169,7 +169,7 @@ class TestZeroInDegree(unittest.TestCase):
         A = generate_custom(n, [(0, 1), (1, 2)])
         td = np.full(n, 0.1); tf = np.full(n, 0.1)
         S0 = np.zeros(n, dtype=np.int32); S0[2] = STATE_FAILED
-        final, _, _ = run_until_stable(S0, A, td, tf)
+        final, _, _, _ = run_until_stable(S0, A, td, tf)
         self.assertEqual(final[3], STATE_OPERATIONAL)
         self.assertEqual(final[4], STATE_OPERATIONAL)
 
