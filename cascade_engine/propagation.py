@@ -100,9 +100,13 @@ def propagation_step(
     F: np.ndarray = np.where(D > 0, failed_in / D_safe, 0.0)  # shape (n,)
 
     # Compute candidate new states
+    # Guard with (D > 0): nodes with no in-neighbors have no cascade signal and
+    # must never transition due to an empty failed fraction (F_i is undefined / 0).
+    # This matches the stochastic engine's explicit (D > 0) guard and the model
+    # intent stated in the README ("F_i = 0 if D_i == 0" means no trigger).
     new_state = np.full(n, STATE_OPERATIONAL, dtype=np.int32)
-    new_state = np.where(F >= theta_deg, STATE_DEGRADED, new_state)
-    new_state = np.where(F >= theta_fail, STATE_FAILED, new_state)
+    new_state = np.where((F >= theta_deg) & (D > 0), STATE_DEGRADED, new_state)
+    new_state = np.where((F >= theta_fail) & (D > 0), STATE_FAILED, new_state)
 
     # Enforce monotonicity: state can never decrease
     result: np.ndarray = np.maximum(S, new_state).astype(np.int32)
@@ -120,7 +124,7 @@ def run_until_stable(
     theta_deg: np.ndarray,
     theta_fail: np.ndarray,
     max_steps: int | None = None,
-) -> tuple[np.ndarray, int, np.ndarray]:
+) -> tuple[np.ndarray, int, np.ndarray, bool]:
     """Run the cascade until the state vector stabilises or max_steps is reached.
 
     Parameters
@@ -140,12 +144,17 @@ def run_until_stable(
     Returns
     -------
     final_state : np.ndarray, shape (n,)
-        State vector at convergence.
+        State vector at convergence (or at truncation if max_steps was reached).
     time_to_stability : int
         Number of steps taken until the state stopped changing (0 if S0 is
         already stable).
     full_state_history : np.ndarray, shape (T+1, n)
         Complete state history including the initial state at row 0.
+    convergence_reached : bool
+        ``True`` if the state vector stabilised before ``max_steps`` was
+        exhausted; ``False`` if the loop was cut short.  With the default
+        ``max_steps = 2 * n`` this is always ``True`` for monotone systems,
+        but callers passing a custom ``max_steps`` should check this flag.
 
     Raises
     ------
@@ -154,6 +163,8 @@ def run_until_stable(
     ValueError
         If input arrays are inconsistent in shape.
     """
+    import warnings
+
     n = int(A.shape[0])
     if A.shape != (n, n):
         raise ValueError(f"A must be square; got shape {A.shape}.")
@@ -174,6 +185,7 @@ def run_until_stable(
     history: list[np.ndarray] = [S_current.copy()]
 
     steps_taken: int = 0
+    convergence_reached: bool = False
     for _ in range(max_steps):
         S_next = propagation_step(S_current, A, theta_deg, theta_fail, D)
 
@@ -191,12 +203,20 @@ def run_until_stable(
         if np.array_equal(S_next, S_current):
             # Stable: remove the duplicate final snapshot
             history.pop()
+            convergence_reached = True
             break
 
         S_current = S_next
+    else:
+        warnings.warn(
+            f"run_until_stable: max_steps={max_steps} reached without convergence. "
+            "Returning partial result. Consider increasing max_steps.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     full_history = np.array(history, dtype=np.int32)  # shape (T+1, n)
     # time_to_stability = number of steps until first stable state
     time_to_stability = full_history.shape[0] - 1
 
-    return S_current, time_to_stability, full_history
+    return S_current, time_to_stability, full_history, convergence_reached

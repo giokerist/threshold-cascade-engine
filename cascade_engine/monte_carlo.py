@@ -150,7 +150,7 @@ def run_monte_carlo(
         S0 = np.zeros(n, dtype=np.int32)
         S0[seed_node] = 2  # STATE_FAILED
 
-        final_state, t_stable, _ = run_until_stable_stochastic(
+        final_state, t_stable, _, _ = run_until_stable_stochastic(
             S0, A, theta_deg, theta_fail, k=k, rng=trial_rng, max_steps=max_steps
         )
 
