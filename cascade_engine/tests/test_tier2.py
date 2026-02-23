@@ -114,7 +114,7 @@ class TestStochasticMonotonicity(unittest.TestCase):
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
         rng = default_rng(42)
-        _, _, history = run_until_stable_stochastic(S0, A, td, tf, k=5.0, rng=rng)
+        _, _, history, _ = run_until_stable_stochastic(S0, A, td, tf, k=5.0, rng=rng)
         for t in range(history.shape[0] - 1):
             self.assertTrue(
                 np.all(history[t + 1] >= history[t]),
@@ -131,7 +131,7 @@ class TestStochasticMonotonicity(unittest.TestCase):
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
         rng = default_rng(99)
-        _, _, history = run_until_stable_stochastic(S0, A, td, tf, k=8.0, rng=rng)
+        _, _, history, _ = run_until_stable_stochastic(S0, A, td, tf, k=8.0, rng=rng)
         for t in range(history.shape[0] - 1):
             self.assertTrue(np.all(history[t + 1] >= history[t]))
 
@@ -142,10 +142,10 @@ class TestStochasticMonotonicity(unittest.TestCase):
         td, tf = _uniform_thresh(n, 0.3, 0.6)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        final1, _, _ = run_until_stable_stochastic(
+        final1, _, _, _ = run_until_stable_stochastic(
             S0, A, td, tf, k=5.0, rng=default_rng(42)
         )
-        final2, _, _ = run_until_stable_stochastic(
+        final2, _, _, _ = run_until_stable_stochastic(
             S0, A, td, tf, k=5.0, rng=default_rng(42)
         )
         np.testing.assert_array_equal(final1, final2)
@@ -166,7 +166,7 @@ class TestStochasticMonotonicity(unittest.TestCase):
         S0[0] = STATE_FAILED   # hub fails; leaves face F=1.0, p≈0.62
         results = []
         for seed in range(40):
-            final, _, _ = run_until_stable_stochastic(
+            final, _, _, _ = run_until_stable_stochastic(
                 S0, A, td, tf, k=1.0, rng=default_rng(seed)
             )
             results.append(tuple(final.tolist()))
@@ -180,7 +180,7 @@ class TestStochasticMonotonicity(unittest.TestCase):
         td, tf = _uniform_thresh(n, 0.3, 0.6)
         S0 = np.zeros(n, dtype=np.int32)
         S0[3] = STATE_FAILED
-        final, steps, _ = run_until_stable_stochastic(
+        final, steps, _, _ = run_until_stable_stochastic(
             S0, A, td, tf, k=5.0, rng=default_rng(0)
         )
         self.assertEqual(final[3], STATE_FAILED)
@@ -196,7 +196,7 @@ class TestStochasticMonotonicity(unittest.TestCase):
         td, tf = _uniform_thresh(n, 0.1, 0.15)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        _, steps, _ = run_until_stable_stochastic(
+        _, steps, _, _ = run_until_stable_stochastic(
             S0, A, td, tf, k=3.0, rng=default_rng(0), max_steps=2
         )
         self.assertLessEqual(steps, 2)
@@ -210,9 +210,9 @@ class TestStochasticMonotonicity(unittest.TestCase):
         tf = np.full(n, 0.5)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        det_final, _, _ = run_until_stable(S0, A, td, tf)
+        det_final, _, _, _ = run_until_stable(S0, A, td, tf)
         # With k=1000, logistic is effectively a step function
-        stoch_final, _, _ = run_until_stable_stochastic(
+        stoch_final, _, _, _ = run_until_stable_stochastic(
             S0, A, td, tf, k=1000.0, rng=default_rng(0)
         )
         np.testing.assert_array_equal(stoch_final, det_final)
@@ -432,7 +432,7 @@ class TestSensitivity(unittest.TestCase):
         self.assertEqual(len(points), 1)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        final, _, _ = run_until_stable(S0, A, td, tf)
+        final, _, _, _ = run_until_stable(S0, A, td, tf)
         expected_frac = float(np.sum(final >= SD)) / n
         self.assertAlmostEqual(points[0].cascade_size_fraction, expected_frac, places=9)
 
@@ -678,7 +678,7 @@ class TestTier1Unchanged(unittest.TestCase):
         tf = np.zeros(n)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        final, _, _ = run_until_stable(S0, A, td, tf)
+        final, _, _, _ = run_until_stable(S0, A, td, tf)
         self.assertTrue(np.all(final == STATE_FAILED))
 
 
