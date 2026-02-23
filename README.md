@@ -22,10 +22,11 @@ cascade_engine/
 ├── config_deterministic_with_sensitivity.json
 ├── requirements.txt
 │
-├── test_propagation.py                     # Tier 1 tests (unchanged)
-├── test_graph.py                           # Tier 1 tests (unchanged)
-├── test_config.py                          # Tier 1 tests (unchanged)
-└── test_tier2.py                           # Tier 2 tests (65 tests)
+├── tests/
+│   ├── test_propagation.py                 # Tier 1 tests (unchanged)
+│   ├── test_graph.py                       # Tier 1 tests (unchanged)
+│   ├── test_config.py                      # Tier 1 tests (unchanged)
+│   └── test_tier2.py                       # Tier 2 tests (65 tests)
 ```
 
 ## Setup
@@ -199,3 +200,4 @@ sigmoid(x) = 1 / (1 + exp(−x))
 ## Adjacency Matrix Convention
 
 `A[j, i] = 1` ↔ directed edge `j → i` (column `i` = in-neighbors of node `i`).
+
