@@ -164,7 +164,7 @@ def run_until_stable_stochastic(
     k: float,
     rng: Generator,
     max_steps: int | None = None,
-) -> tuple[np.ndarray, int, np.ndarray]:
+) -> tuple[np.ndarray, int, np.ndarray, bool]:
     """Run the stochastic cascade until the state vector stabilises.
 
     Stabilisation is declared when no state changes occur in a step.  Because
@@ -194,11 +194,14 @@ def run_until_stable_stochastic(
     Returns
     -------
     final_state : np.ndarray, shape (n,)
-        State vector at convergence (or when max_steps reached).
+        State vector at convergence (or at truncation if max_steps was reached).
     time_to_stability : int
         Number of steps taken until no further changes were observed.
     full_state_history : np.ndarray, shape (T+1, n)
         Complete state history including the initial state at row 0.
+    convergence_reached : bool
+        ``True`` if the state vector stabilised before ``max_steps`` was
+        exhausted; ``False`` if the loop was cut short.
 
     Raises
     ------
@@ -208,6 +211,8 @@ def run_until_stable_stochastic(
     ValueError
         If input arrays are inconsistent in shape.
     """
+    import warnings
+
     n = int(A.shape[0])
     if A.shape != (n, n):
         raise ValueError(f"A must be square; got shape {A.shape}.")
@@ -229,6 +234,7 @@ def run_until_stable_stochastic(
     history: list[np.ndarray] = [S_current.copy()]
 
     steps_taken: int = 0
+    convergence_reached: bool = False
     for _ in range(max_steps):
         S_next = propagation_step_stochastic(
             S_current, A, theta_deg, theta_fail, D, k, rng
@@ -246,11 +252,19 @@ def run_until_stable_stochastic(
 
         if np.array_equal(S_next, S_current):
             history.pop()
+            convergence_reached = True
             break
 
         S_current = S_next
+    else:
+        warnings.warn(
+            f"run_until_stable_stochastic: max_steps={max_steps} reached without "
+            "convergence. Returning partial result. Consider increasing max_steps.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     full_history = np.array(history, dtype=np.int32)
     time_to_stability = full_history.shape[0] - 1
 
-    return S_current, time_to_stability, full_history
+    return S_current, time_to_stability, full_history, convergence_reached
