@@ -125,7 +125,7 @@ def fragility_index(
         S0 = np.zeros(n, dtype=np.int32)
         S0[i] = STATE_FAILED
 
-        final_state, _, _ = run_until_stable(
+        final_state, _, _, _ = run_until_stable(
             S0, A, theta_deg, theta_fail, max_steps=max_steps
         )
 
