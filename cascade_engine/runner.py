@@ -147,7 +147,7 @@ def _run_deterministic(
 
     # Full cascade reference: every node seeded as failed
     S_all = np.full(n, 2, dtype=np.int32)
-    full_final, _, _ = run_until_stable(S_all, A, theta_deg, theta_fail)
+    full_final, _, _, _ = run_until_stable(S_all, A, theta_deg, theta_fail)
     full_cs = cascade_size(full_final)
 
     # Fragility index
@@ -402,7 +402,9 @@ def _run_sensitivity(
     seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
     stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 20))
-    master_seed: int = int(cfg["seed"])
+    # Offset the sensitivity seed well beyond the Monte Carlo seed space
+    # (MC uses seeds up to master_seed + n * trials) to ensure RNG independence.
+    master_seed: int = int(cfg["seed"]) + 10_000_000
 
     print(
         f"[Sensitivity] mode={mode} | {len(perturbations)} perturbations | "
