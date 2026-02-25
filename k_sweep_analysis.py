@@ -26,7 +26,11 @@ for k in K_VALUES:
 
     output_dir = os.path.join(OUTPUT_BASE, f"k_{k}")
     cmd = ["python3", "-m", "cascade_engine.runner", temp_config_path, "--output-dir", output_dir]
-    subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"  [WARNING] subprocess failed for k={k} (exit {proc.returncode}):")
+        for line in proc.stderr.strip().splitlines()[-5:]:
+            print(f"    {line}")
     
     summary_path = os.path.join(output_dir, "summary.json")
     try:
