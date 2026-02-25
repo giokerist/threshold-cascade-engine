@@ -1,6 +1,7 @@
 import json
 import subprocess
 import os
+import tempfile
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -18,9 +19,9 @@ for k in K_VALUES:
     with open(BASE_CONFIG, 'r') as f:
         config = json.load(f)
     
-    config['stochastic_k'] = k 
-    temp_config_path = f"temp_config_k_{k}.json"
-    with open(temp_config_path, 'w') as f:
+    config['stochastic_k'] = k
+    tmp_fd, temp_config_path = tempfile.mkstemp(suffix=f"_k{k}.json", prefix="cascade_")
+    with os.fdopen(tmp_fd, 'w') as f:
         json.dump(config, f)
 
     output_dir = os.path.join(OUTPUT_BASE, f"k_{k}")
