@@ -8,6 +8,7 @@ reproducibly using numpy random Generator with a fixed seed.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,23 @@ def _validate_config(cfg: ConfigDict) -> None:
             f"graph.type must be one of {GRAPH_TYPES}, got {graph_cfg['type']!r}"
         )
 
+    # Type-specific required parameters
+    _GRAPH_REQUIRED_PARAMS: dict[str, list[str]] = {
+        "erdos_renyi":      ["n", "p"],
+        "barabasi_albert":  ["n", "m"],
+        "watts_strogatz":   ["n", "k", "p"],
+        "custom":           ["n", "edges"],
+    }
+    gtype = graph_cfg["type"]
+    missing_graph_params = [
+        p for p in _GRAPH_REQUIRED_PARAMS[gtype] if p not in graph_cfg
+    ]
+    if missing_graph_params:
+        raise ValueError(
+            f"graph config for type {gtype!r} is missing required "
+            f"parameter(s): {missing_graph_params}"
+        )
+
     thresh_cfg = cfg["thresholds"]
     if "type" not in thresh_cfg:
         raise ValueError("thresholds.type is required")
@@ -137,6 +155,8 @@ def generate_thresholds(
         Degradation thresholds clipped to [0, 1].
     theta_fail : np.ndarray, shape (n,)
         Failure thresholds clipped to [0, 1], always >= theta_deg element-wise.
+        A ``UserWarning`` is emitted for any node where the raw draw required
+        correction (theta_fail raised to match theta_deg).
 
     Raises
     ------
@@ -173,8 +193,42 @@ def generate_thresholds(
     theta_deg = np.clip(theta_deg, 0.0, 1.0)
     theta_fail = np.clip(theta_fail, 0.0, 1.0)
 
-    # Enforce theta_fail >= theta_deg element-wise
-    theta_fail = np.maximum(theta_fail, theta_deg)
+    # Enforce theta_fail >= theta_deg element-wise.
+    # Where the raw draw violates this (theta_fail < theta_deg), we correct by
+    # clamping theta_fail up to theta_deg.  This can happen with normal
+    # distributions whose tails overlap, or with misconfigured uniform ranges.
+    # We emit a warning so callers are aware their thresholds were modified.
+    violation_mask = theta_fail < theta_deg
+    n_violations = int(np.sum(violation_mask))
+    if n_violations > 0:
+        violating_nodes = np.where(violation_mask)[0].tolist()
+        warnings.warn(
+            f"generate_thresholds: theta_fail < theta_deg for {n_violations} node(s) "
+            f"(indices: {violating_nodes[:10]}{'...' if n_violations > 10 else ''}). "
+            f"theta_fail has been raised to match theta_deg for those nodes. "
+            f"To suppress this, ensure fail_low >= deg_high (uniform) or "
+            f"fail_mean - 3*fail_std >= deg_mean + 3*deg_std (normal).",
+            UserWarning,
+            stacklevel=2,
+        )
+        theta_fail = np.maximum(theta_fail, theta_deg)
+
+    # Warn when any threshold is exactly 0.0: nodes with in-edges and a zero
+    # threshold will transition immediately at step 1 even with no failed
+    # in-neighbors (F_i >= 0 is always true).  This is mathematically correct
+    # but almost never the intended behaviour in infrastructure models.
+    n_zero_deg  = int(np.sum(theta_deg  == 0.0))
+    n_zero_fail = int(np.sum(theta_fail == 0.0))
+    if n_zero_deg > 0 or n_zero_fail > 0:
+        warnings.warn(
+            f"generate_thresholds: {n_zero_deg} node(s) have theta_deg == 0.0 and "
+            f"{n_zero_fail} node(s) have theta_fail == 0.0 after clipping. "
+            f"Any such node with at least one in-edge will transition immediately "
+            f"at step 1 regardless of neighbor states (F_i >= 0 is always satisfied). "
+            f"Use theta_deg > 0 and theta_fail > 0 in realistic infrastructure models.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     return theta_deg, theta_fail
 
