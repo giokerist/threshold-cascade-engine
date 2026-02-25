@@ -93,6 +93,7 @@ python -m cascade_engine.runner cascade_engine/config_stochastic_er.json --outpu
 The engine produces the following artifacts (file names are exact as produced by the `runner`):
 
 * `fragility_results.csv` — Per-node: fragility index, thresholds, in-degree
+* `topk_cascade_results.csv` — Top-k worst-case cascade stats by fragility index + in-degree (deterministic mode only)
 * `results_summary.csv` — Aggregate key-value statistics
 * `summary.json` — Structured JSON summary
 * `config_snapshot.json` — Exact config + SHA-256 hash
