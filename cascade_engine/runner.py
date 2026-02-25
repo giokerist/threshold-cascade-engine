@@ -32,8 +32,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 from .config import load_config, build_rng, generate_thresholds
 from .graph import graph_from_config
 from .metrics import (
