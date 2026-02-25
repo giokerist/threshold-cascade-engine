@@ -39,4 +39,8 @@ def _rewrite_config_path_arg(argv: list[str]) -> list[str]:
 
 if __name__ == "__main__":
     sys.argv = _rewrite_config_path_arg(sys.argv)
+from cascade_engine.runner import main
+
+
+if __name__ == "__main__":
     main()
