@@ -177,12 +177,3 @@ The `Makefile` inside `cascade_engine/` contains convenient targets:
 ## Adjacency matrix convention
 
 `A[j, i] = 1` ↔ directed edge `j → i` (column `i` = in-neighbors of node `i`).
-
----
-
-If you'd like, I can:
-
-* produce a shorter `README` for the GitHub front page with badges and 1–2 quick examples, or
-* create a `USAGE.md` with long-form examples and Jupyter notebook snippets showing typical experiments.
-
-Tell me which one you prefer next and I'll add it to the repo.
