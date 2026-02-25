@@ -91,6 +91,15 @@ def _config_hash(cfg: dict) -> str:
     return hashlib.sha256(serialised).hexdigest()
 
 
+def _nan_to_none(v):
+    """Replace float NaN with None for valid JSON serialisation."""
+    try:
+        import math
+        return None if (isinstance(v, float) and math.isnan(v)) else v
+    except TypeError:
+        return v
+
+
 def _save_config_snapshot(output_dir: Path, cfg: dict) -> None:
     snapshot = {
         "config": cfg,
@@ -386,14 +395,7 @@ def _run_stochastic(
     # summary.json — replace any NaN values with None so output is valid JSON.
     # NaN arises when spearman_rho is undefined (e.g. all cascade sizes identical
     # at very low k), causing json.dumps to emit the non-standard NaN literal.
-    def _nan_to_none(v):
-        try:
-            import math
-            return None if (isinstance(v, float) and math.isnan(v)) else v
-        except TypeError:
-            return v
-
-    summary_kv_serialisable = {metric_key: _nan_to_none(v) for metric_key, v in summary_kv.items()}
+    summary_kv_serialisable = {k: _nan_to_none(v) for k, v in summary_kv.items()}
     (output_dir / "summary.json").write_text(json.dumps(summary_kv_serialisable, indent=2))
 
     _print_stochastic_summary(n, trials, k, elapsed_mc, mc_mean_cs, rmse_val, mape_val, spearman)
