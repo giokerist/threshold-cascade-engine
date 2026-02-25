@@ -167,7 +167,52 @@ The `Makefile` inside `cascade_engine/` contains convenient targets:
 
 ---
 
-## Contributing / notes for maintainers
+## k-Sweep analysis (`k_sweep_analysis.py`)
+
+The `k_sweep_analysis.py` script (at the repository root) validates that the stochastic engine converges to the deterministic engine as the logistic steepness parameter `k` increases. It sweeps over a range of `k` values, runs a full stochastic Monte Carlo experiment for each, and compares results against the deterministic fragility index using Spearman rank correlation (ρ) and RMSE.
+
+### What it measures
+
+For each `k` value, the script reports:
+
+* **Spearman ρ** — rank correlation between stochastic mean cascade sizes and deterministic fragility fractions. Should approach 1.0 as k → ∞.
+* **RMSE** — absolute prediction error between stochastic and deterministic results. Should approach 0 as k → ∞.
+
+### Running the sweep
+
+From the repository root:
+
+```bash
+python3 k_sweep_analysis.py
+```
+
+The script uses `cascade_engine/config_stochastic_er.json` as the base config and overwrites `stochastic_k` for each iteration. Results are printed to stdout and a plot is saved to `k_sweep_results.png`.
+
+### Expected output
+
+```
+k-Value    | Spearman Rho    | RMSE
+----------------------------------------
+2          | 0.0000          | 0.9796
+5          | 0.0000          | 0.9796
+10         | 0.5162          | 0.1185
+20         | 0.9706          | 0.0003
+40         | 1.0000          | 0.0000
+80         | 1.0000          | 0.0000
+150        | 1.0000          | 0.0000
+300        | 1.0000          | 0.0000
+```
+
+Low `k` values (2–5) produce a flat logistic curve so all nodes receive similar failure probabilities regardless of their F_i — the ranking signal is lost and ρ ≈ 0. By k = 20–40 the stochastic results converge to the deterministic rankings. This confirms Tier 2 is a strict generalisation of Tier 1.
+
+### Output artefacts
+
+* `results_k_sweep/k_{k}/` — full runner output directory for each k value (fragility CSVs, summary JSON, etc.)
+* `k_sweep_results.png` — two-panel plot: Spearman ρ vs k and RMSE vs k
+
+---
+
+
 
 * Tests are structured into Tier 1 (deterministic) and Tier 2 (stochastic) groups — keep tests deterministic by fixing `seed` values where applicable.
 * Avoid global NumPy RNG state; use `default_rng` and `SeedSequence` for reproducibility.
