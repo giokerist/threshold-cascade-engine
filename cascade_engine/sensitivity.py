@@ -366,7 +366,7 @@ def sensitivity_aggregate_by_perturbation(
     list of dict
         Sorted by perturbation.  Each dict has keys:
         perturbation, mean_cascade_size, std_cascade_size, n_seed_nodes,
-        clamp_mode, n_nodes_clamped_mean.
+        clamp_mode, n_nodes_clamped.
     """
     from collections import defaultdict
     grouped: dict[float, list] = defaultdict(list)
