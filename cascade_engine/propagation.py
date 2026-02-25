@@ -13,6 +13,8 @@ All functions are pure (no global mutable state) and deterministic.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 
@@ -71,14 +73,17 @@ def propagation_step(
     The failed-fraction F_i is computed as:
 
         failed_neighbors_i = sum_j  A[j, i]  *  (S[j] == 2)
-        F_i = failed_neighbors_i / D_i   (0 if D_i == 0)
+        F_i = failed_neighbors_i / D_i   (undefined / no signal if D_i == 0)
 
     Update rule (applied simultaneously for all i):
 
-        if F_i >= theta_fail[i]  ->  new_state = 2
-        elif F_i >= theta_deg[i] ->  new_state = 1
-        else                      ->  new_state = S[i]  (unchanged)
+        if   D_i == 0              ->  new_state = S[i]  (no cascade signal; isolate)
+        elif F_i >= theta_fail[i]  ->  new_state = 2
+        elif F_i >= theta_deg[i]   ->  new_state = 1
+        else                       ->  new_state = S[i]  (unchanged)
 
+    Only FAILED (state=2) in-neighbors contribute to F_i.
+    Degraded (state=1) in-neighbors exert zero cascade pressure.
     Monotonicity is enforced via element-wise maximum.
     """
     n = S.shape[0]
@@ -94,16 +99,16 @@ def propagation_step(
     # Equivalently: (A.T @ failed_mask)[i]
     failed_in: np.ndarray = A.T @ failed_mask  # shape (n,)
 
-    # Compute fraction; nodes with D_i == 0 get F_i = 0
-    # Avoid divide-by-zero warnings by using safe denominator
+    # Compute failed-fraction; set numerically to 0 for isolates (D_i == 0) so
+    # the division is safe, but the (D > 0) guard below ensures isolates never
+    # transition — F_i is semantically undefined (no signal) when D_i == 0.
     D_safe = np.where(D > 0, D, 1.0)
     F: np.ndarray = np.where(D > 0, failed_in / D_safe, 0.0)  # shape (n,)
 
-    # Compute candidate new states
-    # Guard with (D > 0): nodes with no in-neighbors have no cascade signal and
-    # must never transition due to an empty failed fraction (F_i is undefined / 0).
-    # This matches the stochastic engine's explicit (D > 0) guard and the model
-    # intent stated in the README ("F_i = 0 if D_i == 0" means no trigger).
+    # Compute candidate new states.
+    # Guard with (D > 0): isolates have no cascade signal (F_i semantically
+    # undefined) and must never transition via the cascade mechanism.
+    # This matches the stochastic engine's explicit (D > 0) guard and the README.
     new_state = np.full(n, STATE_OPERATIONAL, dtype=np.int32)
     new_state = np.where((F >= theta_deg) & (D > 0), STATE_DEGRADED, new_state)
     new_state = np.where((F >= theta_fail) & (D > 0), STATE_FAILED, new_state)
@@ -163,8 +168,6 @@ def run_until_stable(
     ValueError
         If input arrays are inconsistent in shape.
     """
-    import warnings
-
     n = int(A.shape[0])
     if A.shape != (n, n):
         raise ValueError(f"A must be square; got shape {A.shape}.")
@@ -184,24 +187,23 @@ def run_until_stable(
     S_current = np.array(S0, dtype=np.int32)
     history: list[np.ndarray] = [S_current.copy()]
 
-    steps_taken: int = 0
     convergence_reached: bool = False
     for _ in range(max_steps):
         S_next = propagation_step(S_current, A, theta_deg, theta_fail, D)
 
-        # Monotonicity check
+        # Monotonicity check — step index is len(history) before append
         if np.any(S_next < S_current):
             violators = np.where(S_next < S_current)[0].tolist()
             raise MonotonicityViolation(
-                f"Monotonicity violated at step {steps_taken + 1} "
+                f"Monotonicity violated at step {len(history)} "
                 f"for nodes: {violators}"
             )
 
         history.append(S_next.copy())
-        steps_taken += 1
 
         if np.array_equal(S_next, S_current):
-            # Stable: remove the duplicate final snapshot
+            # Stable: remove the duplicate final snapshot so history length
+            # equals (meaningful steps taken + 1 for S0).
             history.pop()
             convergence_reached = True
             break
