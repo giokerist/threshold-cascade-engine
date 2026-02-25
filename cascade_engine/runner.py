@@ -174,15 +174,11 @@ def _run_deterministic(
             "n_degraded": sn_cs["n_degraded"],
         })
 
-    # Keep the highest-FI node as the primary "worst case" for summary fields
+    # Keep the highest-FI node as the primary "worst case" for summary fields.
+    # topk_results already contains the cascade stats for this node — reuse them
+    # directly to avoid running an identical cascade a second time.
     highest_fi_node = top_fi_nodes[0]
-    best = next(r for r in topk_results if r["seed_node"] == highest_fi_node)
-    full_cs = cascade_size(
-        run_until_stable(
-            np.array([2 if i == highest_fi_node else 0 for i in range(n)], dtype=np.int32),
-            A, theta_deg, theta_fail
-        )[0]
-    )
+    full_cs = next(r for r in topk_results if r["seed_node"] == highest_fi_node)
 
     # topk_cascade_results.csv  (F-007 fix)
     _write_csv(
@@ -397,7 +393,7 @@ def _run_stochastic(
         except TypeError:
             return v
 
-    summary_kv_serialisable = {k: _nan_to_none(v) for k, v in summary_kv.items()}
+    summary_kv_serialisable = {metric_key: _nan_to_none(v) for metric_key, v in summary_kv.items()}
     (output_dir / "summary.json").write_text(json.dumps(summary_kv_serialisable, indent=2))
 
     _print_stochastic_summary(n, trials, k, elapsed_mc, mc_mean_cs, rmse_val, mape_val, spearman)
