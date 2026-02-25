@@ -240,8 +240,10 @@ def run_monte_carlo_all_seeds(
 
     results: list[MonteCarloResult] = []
     for node, node_ss in enumerate(node_sss):
-        # Each node gets its own master seed derived from the root
-        node_master_seed = int(node_ss.generate_state(1)[0])
+        # Extract a 64-bit integer from the child SeedSequence for full entropy.
+        # The default generate_state() dtype is uint32 (only 32-bit), which
+        # introduces birthday-collision risk for large graphs (n >> 1000).
+        node_master_seed = int(node_ss.generate_state(1, dtype=np.uint64)[0])
         result = run_monte_carlo(
             A, theta_deg, theta_fail,
             seed_node=node,
