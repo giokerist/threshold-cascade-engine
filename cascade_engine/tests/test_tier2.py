@@ -21,18 +21,18 @@ from pathlib import Path
 import numpy as np
 from numpy.random import default_rng
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from stochastic_propagation import (
+from cascade_engine.stochastic_propagation import (
     sigmoid,
     propagation_step_stochastic,
     run_until_stable_stochastic,
 )
-from monte_carlo import run_monte_carlo, confidence_interval
-from sensitivity import threshold_sensitivity, sensitivity_aggregate_by_perturbation
-from metrics import rmse, mape, spearman_correlation, confidence_interval as metrics_ci
-from propagation import STATE_FAILED, STATE_DEGRADED, STATE_OPERATIONAL
-from graph import generate_custom
+from cascade_engine.monte_carlo import run_monte_carlo, confidence_interval
+from cascade_engine.sensitivity import threshold_sensitivity, sensitivity_aggregate_by_perturbation
+from cascade_engine.metrics import rmse, mape, spearman_correlation, confidence_interval as metrics_ci
+from cascade_engine.propagation import STATE_FAILED, STATE_DEGRADED, STATE_OPERATIONAL
+from cascade_engine.graph import generate_custom
 
 
 # ---------------------------------------------------------------------------
@@ -196,14 +196,17 @@ class TestStochasticMonotonicity(unittest.TestCase):
         td, tf = _uniform_thresh(n, 0.1, 0.15)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        _, steps, _, _ = run_until_stable_stochastic(
-            S0, A, td, tf, k=3.0, rng=default_rng(0), max_steps=2
-        )
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _, steps, _, _ = run_until_stable_stochastic(
+                S0, A, td, tf, k=3.0, rng=default_rng(0), max_steps=2
+            )
         self.assertLessEqual(steps, 2)
 
     def test_high_k_matches_deterministic(self):
         """At very high k, stochastic results should match deterministic."""
-        from propagation import run_until_stable
+        from cascade_engine.propagation import run_until_stable
         n = 12
         A = _chain(n)
         td = np.full(n, 0.4)
@@ -282,11 +285,20 @@ class TestMonteCarlo(unittest.TestCase):
         np.testing.assert_array_equal(r1.times_to_stability, r2.times_to_stability)
 
     def test_different_seeds_differ(self):
-        """Different master seeds should produce different distributions."""
-        A, td, tf, n = self._small_setup()
-        r1 = run_monte_carlo(A, td, tf, seed_node=0, trials=20, seed=1, k=5.0)
-        r2 = run_monte_carlo(A, td, tf, seed_node=0, trials=20, seed=9999, k=5.0)
-        # It's astronomically unlikely these would be identical
+        """Different master seeds should produce different distributions.
+
+        Uses a sparse random graph with low k and high thresholds so that
+        genuine stochasticity is present in the outcomes (not all trials
+        collapse to the same deterministic full-cascade result).
+        """
+        from cascade_engine.graph import generate_erdos_renyi
+        n = 20
+        A = generate_erdos_renyi(n, p=0.1, seed=7)
+        td = np.full(n, 0.4)
+        tf = np.full(n, 0.7)
+        r1 = run_monte_carlo(A, td, tf, seed_node=0, trials=50, seed=1, k=2.0)
+        r2 = run_monte_carlo(A, td, tf, seed_node=0, trials=50, seed=9999, k=2.0)
+        # Different seeds must produce different raw cascade_sizes arrays
         self.assertFalse(np.array_equal(r1.cascade_sizes, r2.cascade_sizes))
 
     def test_cascade_sizes_in_unit_interval(self):
@@ -421,8 +433,8 @@ class TestSensitivity(unittest.TestCase):
 
     def test_zero_perturbation_matches_baseline(self):
         """delta=0 should match an unperturbed deterministic run."""
-        from propagation import run_until_stable
-        from propagation import STATE_DEGRADED as SD
+        from cascade_engine.propagation import run_until_stable
+        from cascade_engine.propagation import STATE_DEGRADED as SD
         n = 8
         A = _chain(n)
         td, tf = _uniform_thresh(n, 0.3, 0.5)
@@ -497,6 +509,63 @@ class TestSensitivity(unittest.TestCase):
                 pt1.cascade_size_fraction, pt2.cascade_size_fraction, places=12
             )
 
+    def test_clamp_mode_stored_on_point(self):
+        """SensitivityPoint.clamp_mode must reflect the mode used."""
+        A, td, tf, n = self._setup()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pts_floor = threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0],
+                mode="deterministic", clamp_mode="fail_floored_at_deg",
+            )
+            pts_drag = threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0],
+                mode="deterministic", clamp_mode="fail_drags_deg",
+            )
+        self.assertEqual(pts_floor[0].clamp_mode, "fail_floored_at_deg")
+        self.assertEqual(pts_drag[0].clamp_mode, "fail_drags_deg")
+
+    def test_fail_floored_keeps_theta_deg_constant(self):
+        """fail_floored_at_deg cascade <= fail_drags_deg cascade for large negative delta."""
+        import warnings
+        A, td, tf, n = self._setup()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pts_floor = threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0],
+                mode="deterministic", clamp_mode="fail_floored_at_deg",
+            )
+            pts_drag = threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0],
+                mode="deterministic", clamp_mode="fail_drags_deg",
+            )
+        # Dragging theta_deg down must produce >= cascade size vs flooring theta_fail
+        self.assertGreaterEqual(
+            pts_drag[0].cascade_size_fraction,
+            pts_floor[0].cascade_size_fraction,
+        )
+
+    def test_invalid_clamp_mode_raises(self):
+        """Unknown clamp_mode must raise ValueError."""
+        A, td, tf, n = self._setup()
+        with self.assertRaises(ValueError):
+            threshold_sensitivity(
+                A, td, tf, [-0.1], seed_nodes=[0],
+                mode="deterministic", clamp_mode="bad_mode",
+            )
+
+    def test_consecutive_stable_steps_accepted(self):
+        """consecutive_stable_steps must be accepted without error in stochastic mode."""
+        A, td, tf, n = self._setup()
+        pts = threshold_sensitivity(
+            A, td, tf, [0.0], seed_nodes=[0],
+            mode="stochastic", stochastic_trials=5, seed=0,
+            consecutive_stable_steps=5,
+        )
+        self.assertEqual(len(pts), 1)
+        self.assertGreaterEqual(pts[0].cascade_size_fraction, 0.0)
+
     def test_aggregate_by_perturbation_length(self):
         A, td, tf, n = self._setup()
         perturbations = [-0.1, 0.0, 0.1]
@@ -513,6 +582,53 @@ class TestSensitivity(unittest.TestCase):
         A, td, tf, n = self._setup()
         with self.assertRaises(ValueError):
             threshold_sensitivity(A, td, tf, [0.0], mode="invalid_mode")
+
+    def test_large_negative_delta_warns_theta_deg_clamped(self):
+        """A UserWarning must fire when large negative delta triggers clamping.
+
+        Tests both clamp_mode values:
+        - 'fail_floored_at_deg' (default): warning mentions floor/theta_deg
+        - 'fail_drags_deg' (legacy):       warning mentions theta_deg dragged
+        """
+        import warnings
+        A, td, tf, n = self._setup()
+        # delta=-0.5 drops theta_fail to 0.0, which is below theta_deg=0.3
+
+        # Default mode: fail_floored_at_deg
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0], mode="deterministic",
+                clamp_mode="fail_floored_at_deg",
+            )
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        self.assertGreater(len(user_warnings), 0,
+                           "Expected a UserWarning with fail_floored_at_deg clamping")
+        self.assertIn("theta_deg", str(user_warnings[0].message))
+
+        # Legacy mode: fail_drags_deg
+        with warnings.catch_warnings(record=True) as caught2:
+            warnings.simplefilter("always")
+            threshold_sensitivity(
+                A, td, tf, [-0.5], seed_nodes=[0], mode="deterministic",
+                clamp_mode="fail_drags_deg",
+            )
+        uw2 = [w for w in caught2 if issubclass(w.category, UserWarning)]
+        self.assertGreater(len(uw2), 0,
+                           "Expected a UserWarning with fail_drags_deg clamping")
+        self.assertIn("theta_deg", str(uw2[0].message))
+
+    def test_small_delta_no_theta_deg_warning(self):
+        """No warning when theta_fail stays above theta_deg after perturbation."""
+        import warnings
+        A, td, tf, n = self._setup()
+        # delta=+0.1 raises theta_fail -- no clamping needed
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            threshold_sensitivity(A, td, tf, [0.1], seed_nodes=[0], mode="deterministic")
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        self.assertEqual(len(user_warnings), 0,
+                         "No warning expected when theta_fail stays above theta_deg")
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +771,7 @@ class TestTier1Unchanged(unittest.TestCase):
     after the Tier 2 additions to metrics.py."""
 
     def test_fragility_index_still_works(self):
-        from metrics import fragility_index
+        from cascade_engine.metrics import fragility_index
         n = 6
         A = _chain(n)
         td, tf = _uniform_thresh(n, 0.4, 0.5)
@@ -664,14 +780,14 @@ class TestTier1Unchanged(unittest.TestCase):
         self.assertTrue(np.all(fi >= 1))
 
     def test_cascade_size_still_works(self):
-        from metrics import cascade_size
+        from cascade_engine.metrics import cascade_size
         state = np.array([0, 1, 2, 2, 0], dtype=np.int32)
         stats = cascade_size(state)
         self.assertEqual(stats["n_failed"], 2)
         self.assertEqual(stats["n_degraded"], 1)
 
     def test_deterministic_propagation_unchanged(self):
-        from propagation import run_until_stable
+        from cascade_engine.propagation import run_until_stable
         n = 5
         A = _chain(n)
         td = np.zeros(n)
@@ -680,6 +796,97 @@ class TestTier1Unchanged(unittest.TestCase):
         S0[0] = STATE_FAILED
         final, _, _, _ = run_until_stable(S0, A, td, tf)
         self.assertTrue(np.all(final == STATE_FAILED))
+
+
+class TestUtils(unittest.TestCase):
+    """Tests for cascade_engine.utils."""
+
+    def test_confidence_interval_shared(self):
+        """utils.confidence_interval and metrics.confidence_interval must agree."""
+        from cascade_engine.utils import confidence_interval as utils_ci
+        from cascade_engine.metrics import confidence_interval as metrics_ci
+        samples = np.random.default_rng(0).normal(0, 1, 100)
+        lo1, hi1 = utils_ci(samples)
+        lo2, hi2 = metrics_ci(samples)
+        self.assertAlmostEqual(lo1, lo2, places=12)
+        self.assertAlmostEqual(hi1, hi2, places=12)
+
+    def test_make_trial_rngs_count(self):
+        """make_trial_rngs must return exactly n_trials Generators."""
+        from cascade_engine.utils import make_trial_rngs
+        rngs = make_trial_rngs(master_seed=42, n_trials=10)
+        self.assertEqual(len(rngs), 10)
+
+    def test_make_trial_rngs_independent(self):
+        """Different trial RNGs must produce different random draws."""
+        from cascade_engine.utils import make_trial_rngs
+        rngs = make_trial_rngs(master_seed=0, n_trials=5)
+        draws = [rng.random() for rng in rngs]
+        # All distinct (probability of collision in float64 is negligible)
+        self.assertEqual(len(set(draws)), 5)
+
+    def test_make_trial_rngs_reproducible(self):
+        """Same master_seed must produce same sequence of draws."""
+        from cascade_engine.utils import make_trial_rngs
+        rngs1 = make_trial_rngs(42, 5)
+        rngs2 = make_trial_rngs(42, 5)
+        for r1, r2 in zip(rngs1, rngs2):
+            self.assertEqual(r1.random(), r2.random())
+
+    def test_make_node_trial_rngs_shape(self):
+        """make_node_trial_rngs must return (n_nodes, n_trials) grid."""
+        from cascade_engine.utils import make_node_trial_rngs
+        grid = make_node_trial_rngs(0, n_nodes=4, n_trials=6)
+        self.assertEqual(len(grid), 4)
+        for row in grid:
+            self.assertEqual(len(row), 6)
+
+
+class TestConsecutiveStableSteps(unittest.TestCase):
+    """Tests for the F-001 fix: multi-step convergence criterion."""
+
+    def _setup(self):
+        n = 8
+        A = _chain(n)
+        td, tf = _uniform_thresh(n, 0.3, 0.6)
+        return A, td, tf, n
+
+    def test_invalid_consecutive_steps_raises(self):
+        """consecutive_stable_steps < 1 must raise ValueError."""
+        from cascade_engine.stochastic_propagation import run_until_stable_stochastic
+        A, td, tf, n = self._setup()
+        rng = np.random.default_rng(0)
+        S0 = np.zeros(n, dtype=np.int32); S0[0] = 2
+        with self.assertRaises(ValueError):
+            run_until_stable_stochastic(S0, A, td, tf, k=5.0, rng=rng,
+                                        consecutive_stable_steps=0)
+
+    def test_single_step_vs_multi_step(self):
+        """3-step convergence must return cascade_size >= 1-step convergence."""
+        from cascade_engine.stochastic_propagation import run_until_stable_stochastic
+        A, td, tf, n = self._setup()
+        S0 = np.zeros(n, dtype=np.int32); S0[0] = 2
+
+        rng1 = np.random.default_rng(5)
+        final1, _, _, _ = run_until_stable_stochastic(S0, A, td, tf, k=3.0, rng=rng1,
+                                                       consecutive_stable_steps=1)
+        rng3 = np.random.default_rng(5)
+        final3, _, _, _ = run_until_stable_stochastic(S0, A, td, tf, k=3.0, rng=rng3,
+                                                       consecutive_stable_steps=3)
+        # With more patience, we get >= affected nodes (never fewer due to monotonicity)
+        self.assertGreaterEqual(
+            int(np.sum(final3 >= 1)),
+            int(np.sum(final1 >= 1)),
+        )
+
+    def test_monte_carlo_accepts_consecutive_stable_steps(self):
+        """run_monte_carlo must forward consecutive_stable_steps without error."""
+        from cascade_engine.monte_carlo import run_monte_carlo
+        A, td, tf, n = self._setup()
+        result = run_monte_carlo(A, td, tf, seed_node=0, trials=5, seed=0,
+                                 k=5.0, consecutive_stable_steps=5)
+        self.assertEqual(result.consecutive_stable_steps, 5)
+        self.assertEqual(len(result.cascade_sizes), 5)
 
 
 if __name__ == "__main__":
