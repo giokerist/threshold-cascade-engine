@@ -11,17 +11,17 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from propagation import (
+from cascade_engine.propagation import (
     run_until_stable,
     propagation_step,
     STATE_OPERATIONAL,
     STATE_DEGRADED,
     STATE_FAILED,
 )
-from graph import generate_custom
-from metrics import fragility_index, cascade_size
+from cascade_engine.graph import generate_custom
+from cascade_engine.metrics import fragility_index, cascade_size
 
 
 def uniform_thresholds(n, deg, fail):
@@ -94,7 +94,10 @@ class TestConvergenceBound(unittest.TestCase):
         td, tf = uniform_thresholds(n, 0.1, 0.2)
         S0 = np.zeros(n, dtype=np.int32)
         S0[0] = STATE_FAILED
-        _, steps, _, _ = run_until_stable(S0, A, td, tf, max_steps=1)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _, steps, _, _ = run_until_stable(S0, A, td, tf, max_steps=1)
         self.assertLessEqual(steps, 1)
 
     def test_already_stable_zero_steps(self):
