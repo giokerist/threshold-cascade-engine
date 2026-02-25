@@ -6,7 +6,7 @@
 install:
 	pip install -r requirements.txt
 
-# Run all 105 tests (Tier 1 + Tier 2)
+# Run all 128 tests (Tier 1 + Tier 2)
 test:
 	python3 -m pytest tests/ -v
 
