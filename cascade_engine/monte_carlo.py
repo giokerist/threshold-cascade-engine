@@ -2,27 +2,31 @@
 Monte Carlo experiment harness for the cascade propagation engine.
 
 Runs multiple independent trials of the stochastic cascade and returns
-distributional statistics.  Each trial uses a deterministically derived
-sub-seed so that the full experiment is reproducible from a single master seed.
+distributional statistics.  Each trial uses a statistically-independent
+Generator derived via numpy SeedSequence.spawn() (F-006 fix), ensuring
+reproducibility and independence that the simple integer-offset approach
+could not guarantee.
 
 Design principles
 -----------------
-* No global RNG state: every trial creates its own Generator instance.
+* No global RNG state: every trial creates its own Generator instance
+  via SeedSequence.spawn() (replaces seed + trial integer offset).
 * No Python loops over nodes (delegated to stochastic_propagation).
-* Results are immutable numpy arrays — no mutation between trials.
-* Confidence intervals use scipy.stats.t (t-distribution, two-tailed).
+* Results are immutable numpy arrays -- no mutation between trials.
+* Confidence intervals use scipy.stats.t (t-distribution, two-tailed),
+  imported from shared utils.py (F-004 fix -- no more duplication).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
-from numpy.random import Generator, default_rng
-import scipy.stats as stats
+from numpy.random import SeedSequence, default_rng
 
-from stochastic_propagation import run_until_stable_stochastic
-from propagation import STATE_DEGRADED
+from .stochastic_propagation import run_until_stable_stochastic
+from .propagation import STATE_DEGRADED
+from .utils import confidence_interval
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +60,8 @@ class MonteCarloResult:
         Number of nodes in the graph.
     k : float
         Logistic steepness used.
+    consecutive_stable_steps : int
+        Convergence criterion passed to each trial.
     """
     cascade_sizes: np.ndarray
     times_to_stability: np.ndarray
@@ -67,6 +73,7 @@ class MonteCarloResult:
     seed: int
     n_nodes: int
     k: float
+    consecutive_stable_steps: int = 3
 
     def summary_dict(self) -> dict:
         """Return a JSON-serialisable summary (no arrays)."""
@@ -75,6 +82,7 @@ class MonteCarloResult:
             "seed": self.seed,
             "n_nodes": self.n_nodes,
             "k": self.k,
+            "consecutive_stable_steps": self.consecutive_stable_steps,
             "mean_cascade_size": self.mean_cascade_size,
             "variance_cascade_size": self.variance_cascade_size,
             "ci_95_low": self.ci_low,
@@ -100,13 +108,14 @@ def run_monte_carlo(
     seed: int,
     k: float = 10.0,
     max_steps: int | None = None,
+    consecutive_stable_steps: int = 3,
 ) -> MonteCarloResult:
     """Run Monte Carlo trials seeding a single node as the initial failure.
 
     Parameters
     ----------
     A : np.ndarray, shape (n, n)
-        Adjacency matrix: A[j, i] = 1 iff j → i.
+        Adjacency matrix: A[j, i] = 1 iff j -> i.
     theta_deg : np.ndarray, shape (n,)
         Degradation threshold per node.
     theta_fail : np.ndarray, shape (n,)
@@ -116,12 +125,15 @@ def run_monte_carlo(
     trials : int
         Number of independent Monte Carlo trials.
     seed : int
-        Master seed.  Per-trial seeds are derived as ``seed + trial_index``
-        to ensure independence and full reproducibility.
+        Master seed.  Per-trial RNGs are derived via SeedSequence.spawn()
+        (F-006 fix) for guaranteed statistical independence.
     k : float, optional
         Logistic steepness parameter (default 10.0).
     max_steps : int or None, optional
-        Maximum steps per trial.  Passed to ``run_until_stable_stochastic``.
+        Maximum steps per trial.
+    consecutive_stable_steps : int, optional
+        Consecutive quiet steps required for convergence (default 3).
+        Passed through to run_until_stable_stochastic.
 
     Returns
     -------
@@ -140,18 +152,22 @@ def run_monte_carlo(
     if not (0 <= seed_node < n):
         raise ValueError(f"seed_node {seed_node} out of range [0, {n - 1}].")
 
+    # F-006: use SeedSequence.spawn() for statistically-independent trial RNGs
+    ss = SeedSequence(seed)
+    trial_rngs = [default_rng(child) for child in ss.spawn(trials)]
+
     cascade_sizes = np.empty(trials, dtype=np.float64)
     times_to_stability = np.empty(trials, dtype=np.int64)
 
+    S0 = np.zeros(n, dtype=np.int32)
+    S0[seed_node] = 2  # STATE_FAILED
+
     for trial in range(trials):
-        # Derive an isolated per-trial Generator — no global state contamination
-        trial_rng: Generator = default_rng(seed + trial)
-
-        S0 = np.zeros(n, dtype=np.int32)
-        S0[seed_node] = 2  # STATE_FAILED
-
         final_state, t_stable, _, _ = run_until_stable_stochastic(
-            S0, A, theta_deg, theta_fail, k=k, rng=trial_rng, max_steps=max_steps
+            S0, A, theta_deg, theta_fail,
+            k=k, rng=trial_rngs[trial],
+            max_steps=max_steps,
+            consecutive_stable_steps=consecutive_stable_steps,
         )
 
         affected = int(np.sum(final_state >= STATE_DEGRADED))
@@ -160,8 +176,7 @@ def run_monte_carlo(
 
     mean_cs = float(np.mean(cascade_sizes))
     var_cs = float(np.var(cascade_sizes, ddof=1))
-
-    ci_low, ci_high = _confidence_interval_95(cascade_sizes)
+    ci_low, ci_high = confidence_interval(cascade_sizes)   # F-004: shared util
 
     return MonteCarloResult(
         cascade_sizes=cascade_sizes,
@@ -174,6 +189,7 @@ def run_monte_carlo(
         seed=seed,
         n_nodes=n,
         k=k,
+        consecutive_stable_steps=consecutive_stable_steps,
     )
 
 
@@ -185,6 +201,7 @@ def run_monte_carlo_all_seeds(
     seed: int,
     k: float = 10.0,
     max_steps: int | None = None,
+    consecutive_stable_steps: int = 3,
 ) -> list[MonteCarloResult]:
     """Run Monte Carlo trials for every node as initial seed.
 
@@ -201,12 +218,15 @@ def run_monte_carlo_all_seeds(
     trials : int
         Number of trials per seed node.
     seed : int
-        Master seed.  Each node's trials use seeds offset by
-        ``node_index * trials`` to avoid overlap.
+        Master seed.  Node-level seed blocks are derived by spawning n
+        child SeedSequences from the master, then spawning trials children
+        from each node SeedSequence (F-006 fix).
     k : float, optional
         Logistic steepness parameter (default 10.0).
     max_steps : int or None, optional
         Maximum steps per trial.
+    consecutive_stable_steps : int, optional
+        Consecutive quiet steps required for convergence (default 3).
 
     Returns
     -------
@@ -214,78 +234,22 @@ def run_monte_carlo_all_seeds(
         One result per node (length n), in node index order.
     """
     n = A.shape[0]
+    # F-006: two-level SeedSequence hierarchy for full independence
+    root_ss = SeedSequence(seed)
+    node_sss = root_ss.spawn(n)
+
     results: list[MonteCarloResult] = []
-    for node in range(n):
-        # Offset per-node seed block to avoid overlap across nodes
-        node_seed = seed + node * trials
+    for node, node_ss in enumerate(node_sss):
+        # Each node gets its own master seed derived from the root
+        node_master_seed = int(node_ss.generate_state(1)[0])
         result = run_monte_carlo(
             A, theta_deg, theta_fail,
             seed_node=node,
             trials=trials,
-            seed=node_seed,
+            seed=node_master_seed,
             k=k,
             max_steps=max_steps,
+            consecutive_stable_steps=consecutive_stable_steps,
         )
         results.append(result)
     return results
-
-
-# ---------------------------------------------------------------------------
-# Confidence interval utility (also used by metrics.py extension)
-# ---------------------------------------------------------------------------
-
-
-def _confidence_interval_95(samples: np.ndarray) -> tuple[float, float]:
-    """Compute a 95% two-tailed t-distribution confidence interval.
-
-    Parameters
-    ----------
-    samples : np.ndarray, shape (m,)
-        Sample array with m >= 2.
-
-    Returns
-    -------
-    (ci_low, ci_high) : tuple of float
-        Lower and upper bounds of the 95% CI for the population mean.
-    """
-    m = len(samples)
-    if m < 2:
-        raise ValueError("Need at least 2 samples for CI computation.")
-    mean = float(np.mean(samples))
-    se = float(stats.sem(samples))          # standard error of the mean
-    interval = stats.t.interval(0.95, df=m - 1, loc=mean, scale=se)
-    return float(interval[0]), float(interval[1])
-
-
-def confidence_interval(
-    samples: np.ndarray,
-    confidence: float = 0.95,
-) -> tuple[float, float]:
-    """General confidence interval for a sample mean (t-distribution).
-
-    Parameters
-    ----------
-    samples : np.ndarray, shape (m,)
-        Sample array with m >= 2.
-    confidence : float, optional
-        Confidence level in (0, 1).  Default 0.95.
-
-    Returns
-    -------
-    (ci_low, ci_high) : tuple of float
-        Lower and upper bounds.
-
-    Raises
-    ------
-    ValueError
-        If m < 2 or confidence is not in (0, 1).
-    """
-    m = len(samples)
-    if m < 2:
-        raise ValueError("Need at least 2 samples for CI computation.")
-    if not (0 < confidence < 1):
-        raise ValueError(f"confidence must be in (0, 1); got {confidence}.")
-    mean = float(np.mean(samples))
-    se = float(stats.sem(samples))
-    interval = stats.t.interval(confidence, df=m - 1, loc=mean, scale=se)
-    return float(interval[0]), float(interval[1])
