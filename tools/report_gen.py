@@ -415,7 +415,7 @@ systemic amplifiers whose failure cascades broadly through the network.</p>
 steepness k={summary.get('stochastic_k', '?')}, the stochastic Monte Carlo results
 correlate with the deterministic fragility index at
 Spearman&nbsp;ρ&nbsp;=&nbsp;<strong>{spearman_rho:.4f}</strong>
-(RMSE&nbsp;=&nbsp;{rmse_val:.4f if rmse_val is not None else 'N/A'}).
+(RMSE&nbsp;=&nbsp;{f'{rmse_val:.4f}' if rmse_val is not None else 'N/A'}).
 {"A ρ above 0.8 indicates strong rank agreement — stochastic results are reliable." if spearman_rho >= 0.8 else "A ρ below 0.8 suggests high uncertainty; consider increasing k or trials."}</p>"""
 
     # Risk Heatmap
