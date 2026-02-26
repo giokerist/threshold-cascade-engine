@@ -283,7 +283,7 @@ def threshold_sensitivity(
         theta_deg_p, theta_fail_p, n_clamped = _apply_perturbation(
             base_theta_deg, base_theta_fail, delta,
             clamp_mode=clamp_mode,
-            warn_stacklevel=2,
+            warn_stacklevel=3,
         )
 
         for sn_idx, seed_node in enumerate(seed_nodes):
