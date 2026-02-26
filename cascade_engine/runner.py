@@ -231,7 +231,7 @@ def _run_deterministic(
     _write_csv(
         output_dir / "results_summary.csv",
         ["metric", "value"],
-        [{"metric": k, "value": v} for k, v in summary_kv.items()],
+        [{"metric": metric_key, "value": v} for metric_key, v in summary_kv.items()],
     )
 
     # summary.json
@@ -395,7 +395,7 @@ def _run_stochastic(
     # summary.json — replace any NaN values with None so output is valid JSON.
     # NaN arises when spearman_rho is undefined (e.g. all cascade sizes identical
     # at very low k), causing json.dumps to emit the non-standard NaN literal.
-    summary_kv_serialisable = {k: _nan_to_none(v) for k, v in summary_kv.items()}
+    summary_kv_serialisable = {metric_key: _nan_to_none(v) for metric_key, v in summary_kv.items()}
     (output_dir / "summary.json").write_text(json.dumps(summary_kv_serialisable, indent=2))
 
     _print_stochastic_summary(n, trials, k, elapsed_mc, mc_mean_cs, rmse_val, mape_val, spearman)
@@ -455,8 +455,8 @@ def _run_sensitivity(
     seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
     stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 20))
-    # Offset the sensitivity seed well beyond the Monte Carlo seed space
-    # (MC uses seeds up to master_seed + n * trials) to ensure RNG independence.
+    # Use a well-separated seed for sensitivity so its SeedSequence tree is
+    # statistically independent from the Monte Carlo SeedSequence tree (F-006).
     master_seed: int = int(cfg["seed"]) + 10_000_000
 
     print(
