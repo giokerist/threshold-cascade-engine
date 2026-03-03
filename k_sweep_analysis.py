@@ -3,13 +3,16 @@ import subprocess
 import os
 import sys
 import tempfile
+from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend; prevents plt.show() from blocking in headless environments
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Configuration
-BASE_CONFIG = "cascade_engine/config_stochastic_er.json"
+# Configuration — paths are resolved relative to this script's location so
+# the script works regardless of the current working directory.
+_SCRIPT_DIR = Path(__file__).parent
+BASE_CONFIG = str(_SCRIPT_DIR / "cascade_engine" / "config_stochastic_er.json")
 K_VALUES = [2, 5, 10, 20, 40, 80, 150, 300]
 OUTPUT_BASE = "results_k_sweep"
 
