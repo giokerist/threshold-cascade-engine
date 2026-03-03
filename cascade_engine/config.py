@@ -111,6 +111,33 @@ def _validate_config(cfg: ConfigDict) -> None:
             f"parameter(s): {missing_graph_params}"
         )
 
+    # Value-range validation
+    n = int(graph_cfg["n"])
+    if n <= 0:
+        raise ValueError(f"graph.n must be a positive integer; got {n}.")
+
+    if gtype == "erdos_renyi":
+        p = float(graph_cfg["p"])
+        if not (0.0 <= p <= 1.0):
+            raise ValueError(f"graph.p must be in [0, 1]; got {p}.")
+
+    elif gtype == "barabasi_albert":
+        m = int(graph_cfg["m"])
+        if not (1 <= m < n):
+            raise ValueError(
+                f"graph.m must satisfy 1 <= m < n; got m={m}, n={n}."
+            )
+
+    elif gtype == "watts_strogatz":
+        k = int(graph_cfg["k"])
+        p = float(graph_cfg["p"])
+        if not (0 < k < n):
+            raise ValueError(
+                f"graph.k must satisfy 0 < k < n; got k={k}, n={n}."
+            )
+        if not (0.0 <= p <= 1.0):
+            raise ValueError(f"graph.p must be in [0, 1]; got {p}.")
+
     thresh_cfg = cfg["thresholds"]
     if "type" not in thresh_cfg:
         raise ValueError("thresholds.type is required")
