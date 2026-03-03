@@ -606,7 +606,7 @@ def build_markdown_report(
     fi_mean = float(df[fi_col].mean())
     fi_max  = int(df[fi_col].max())
     worst_node = int(df.loc[df[fi_col].idxmax(), "node_id"])
-    worst_frac = round(fi_max / max(n, 1) * 100, 1)
+    worst_frac = round(fi_max / max(n, 1), 4)
 
     spearman_rho = summary.get("spearman_rho")
     rmse_val     = summary.get("rmse_det_vs_stochastic")
@@ -629,9 +629,9 @@ def build_markdown_report(
     )
 
     risk = (
-        "🔴 CRITICAL" if worst_frac / 100 >= 0.4
-        else "🟠 HIGH"    if worst_frac / 100 >= 0.2
-        else "🟡 MODERATE" if worst_frac / 100 >= 0.1
+        "🔴 CRITICAL" if worst_frac >= 0.4
+        else "🟠 HIGH"    if worst_frac >= 0.2
+        else "🟡 MODERATE" if worst_frac >= 0.1
         else "🟢 LOW"
     )
 
@@ -643,7 +643,7 @@ def build_markdown_report(
 | Nodes modelled | {n} |
 | Mean Fragility Index | {fi_mean:.2f} |
 | Max Fragility Index | {fi_max} (Node {worst_node}) |
-| Worst-case cascade | {worst_frac}% of network |
+| Worst-case cascade | {worst_frac*100:.1f}% of network |
 | Ghost Hubs detected | {n_ghost} |
 | Propagation mode | {mode.capitalize()} |
 """)
