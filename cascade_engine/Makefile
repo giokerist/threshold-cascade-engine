@@ -27,6 +27,9 @@ run-er:
 run-ba:
 	$(PYTHON) runner.py config_barabasi_albert.json --output-dir results_ba/
 
+run-ws:
+	$(PYTHON) runner.py config_watts_strogatz.json --output-dir results_ws/
+
 run-stoch-er:
 	$(PYTHON) runner.py config_stochastic_er.json --output-dir results_stoch_er/
 
