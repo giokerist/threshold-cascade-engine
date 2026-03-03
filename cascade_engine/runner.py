@@ -458,7 +458,7 @@ def _run_sensitivity(
         in_deg = A.sum(axis=0).astype(np.int64)
         seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
-    stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 20))
+    stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 30))
     # Use a well-separated seed for sensitivity so its SeedSequence tree is
     # statistically independent from the Monte Carlo SeedSequence tree (F-006).
     master_seed: int = int(cfg["seed"]) + 10_000_000
@@ -514,7 +514,11 @@ def main() -> None:
     cfg = load_config(args.config)
     _save_config_snapshot(output_dir, cfg)
 
-    # Log experiment metadata
+    A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
+
+    # Log experiment metadata (written after successful _build_experiment so
+    # that a file-not-found or networkx error does not leave stale metadata
+    # alongside config_snapshot.json with no corresponding results.)
     (output_dir / "experiment_metadata.json").write_text(
         json.dumps(
             {
@@ -526,8 +530,6 @@ def main() -> None:
             indent=2,
         )
     )
-
-    A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
     mode: str = str(cfg.get("propagation_mode", "deterministic"))
 
     if mode == "deterministic":
