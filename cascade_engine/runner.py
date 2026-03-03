@@ -26,6 +26,7 @@ import csv
 import hashlib
 import json
 import sys
+import math
 import time
 import warnings
 from pathlib import Path
@@ -94,7 +95,6 @@ def _config_hash(cfg: dict) -> str:
 def _nan_to_none(v):
     """Replace float NaN with None for valid JSON serialisation."""
     try:
-        import math
         return None if (isinstance(v, float) and math.isnan(v)) else v
     except TypeError:
         return v
