@@ -20,18 +20,20 @@ test-tier1:
 test-tier2:
 	$(PYTHON) -m pytest tests/test_tier2.py -v
 
-# Example runs
+# Example runs — invoke via module form from the project root so the
+# paths resolve correctly regardless of where make is called from.
+# Usage: cd <project-root> && make -f cascade_engine/Makefile run-er
 run-er:
-	$(PYTHON) runner.py config_erdos_renyi.json --output-dir results_er/
+	cd .. && $(PYTHON) -m cascade_engine.runner cascade_engine/config_erdos_renyi.json --output-dir results_er/
 
 run-ba:
-	$(PYTHON) runner.py config_barabasi_albert.json --output-dir results_ba/
+	cd .. && $(PYTHON) -m cascade_engine.runner cascade_engine/config_barabasi_albert.json --output-dir results_ba/
 
 run-ws:
-	$(PYTHON) runner.py config_watts_strogatz.json --output-dir results_ws/
+	cd .. && $(PYTHON) -m cascade_engine.runner cascade_engine/config_watts_strogatz.json --output-dir results_ws/
 
 run-stoch-er:
-	$(PYTHON) runner.py config_stochastic_er.json --output-dir results_stoch_er/
+	cd .. && $(PYTHON) -m cascade_engine.runner cascade_engine/config_stochastic_er.json --output-dir results_stoch_er/
 
 run-stoch-ba:
-	$(PYTHON) runner.py config_stochastic_ba.json --output-dir results_stoch_ba/
+	cd .. && $(PYTHON) -m cascade_engine.runner cascade_engine/config_stochastic_ba.json --output-dir results_stoch_ba/
