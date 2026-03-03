@@ -33,7 +33,7 @@ cascade_engine/
     └── test_tier2.py
 ```
 
-> Note: tests now live inside `cascade_engine/tests` and `conftest.py` is bundled with the package. You no longer need a project-root `conftest.py` or manual `sys.path` hacks to run the tests.
+> Note: tests now live inside `cascade_engine/tests` and `conftest.py` is bundled with the package. **pytest users** do not need a project-root `conftest.py` — `conftest.py` handles `sys.path` automatically. The `sys.path.insert` lines in each test file are load-bearing for `python3 -m unittest discover` and must not be removed.
 
 ---
 
