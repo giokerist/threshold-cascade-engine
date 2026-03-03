@@ -397,7 +397,6 @@ def plot_ghost_hub(
 
     # Annotate top-N by FI
     top_nodes = df.nlargest(top_n_annotate, fi_col)
-    texts = []
     for _, row in top_nodes.iterrows():
         ax.annotate(
             f"  N{int(row['node_id'])}",
