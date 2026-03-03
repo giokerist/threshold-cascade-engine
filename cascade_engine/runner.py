@@ -449,10 +449,14 @@ def _run_sensitivity(
     perturbations: list[float] = sens_cfg.get(
         "perturbation_values", [-0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2]
     )
-    # Default: up to 20 highest in-degree nodes as seeds
-    max_seed_nodes: int = int(sens_cfg.get("max_seed_nodes", min(n, 20)))
-    in_deg = A.sum(axis=0).astype(np.int64)
-    seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
+    # If sensitivity_config provides an explicit seed_nodes list, use it.
+    # Otherwise fall back to the top max_seed_nodes by in-degree.
+    if "seed_nodes" in sens_cfg:
+        seed_nodes = [int(x) for x in sens_cfg["seed_nodes"]]
+    else:
+        max_seed_nodes: int = int(sens_cfg.get("max_seed_nodes", min(n, 20)))
+        in_deg = A.sum(axis=0).astype(np.int64)
+        seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
     stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 20))
     # Use a well-separated seed for sensitivity so its SeedSequence tree is
