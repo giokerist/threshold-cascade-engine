@@ -163,7 +163,7 @@ The `Makefile` inside `cascade_engine/` contains convenient targets:
 * `make install` — install requirements
 * `make test` — run full test suite
 * `make test-tier1` / `make test-tier2` — run respective test groups
-* `make run-er` / `make run-ba` / `make run-stoch-er` / `make run-stoch-ba` — example experiment runs
+* `make run-er` / `make run-ba` / `make run-ws` / `make run-stoch-er` / `make run-stoch-ba` — example experiment runs
 
 ---
 
