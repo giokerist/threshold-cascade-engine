@@ -14,8 +14,6 @@ Tier 2 additions
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import scipy.stats as _scipy_stats
 
@@ -63,35 +61,6 @@ def cascade_size(final_state: np.ndarray) -> dict[str, int | float]:
         "frac_failed": n_failed / n if n > 0 else 0.0,
         "frac_affected": n_affected / n if n > 0 else 0.0,
     }
-
-
-def time_to_stability(history: np.ndarray) -> int:
-    """Extract the number of propagation steps until stabilisation.
-
-    .. deprecated::
-        This function is redundant.  ``run_until_stable`` already returns
-        ``time_to_stability`` directly as its second return value, computed
-        as ``full_history.shape[0] - 1``.  Prefer reading that value directly
-        rather than calling this wrapper.
-
-    Parameters
-    ----------
-    history : np.ndarray, shape (T+1, n)
-        Full state history as returned by ``run_until_stable``.  Row 0 is
-        the initial state; subsequent rows are post-step states.
-
-    Returns
-    -------
-    int
-        Number of steps taken (= T).
-    """
-    warnings.warn(
-        "metrics.time_to_stability() is deprecated and will be removed in a "
-        "future release. Read run_until_stable()'s second return value directly.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return int(history.shape[0]) - 1
 
 
 # ---------------------------------------------------------------------------
