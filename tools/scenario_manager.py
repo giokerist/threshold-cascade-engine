@@ -288,16 +288,22 @@ def run_regional_scenarios(
 ) -> list[dict]:
     """Regional vulnerability injection.
 
-    Lowers both degradation and failure thresholds for a specified set of
-    node IDs by ``vulnerability_delta``, then runs the full cascade engine.
-    This models external shocks such as a natural disaster affecting a
-    geographic cluster, or cyber-attacks targeting a specific subnet.
+    Models a scenario where failure thresholds are reduced **globally** by
+    ``vulnerability_delta`` (via sensitivity analysis), and the specified
+    ``vulnerable_node_ids`` are used as the initial failure seeds.  This
+    approximates an external shock (e.g. a natural disaster or cyber-attack)
+    that weakens the whole network while originating at a known sub-region.
+
+    .. warning::
+        The threshold perturbation is applied to **all nodes**, not only the
+        listed ``vulnerable_node_ids``.  ``sensitivity_config``'s
+        ``seed_nodes`` controls which nodes are seeded as the initial failure,
+        not which nodes have their thresholds lowered.  For true per-node
+        weakening, build a ``custom`` graph config limited to the affected
+        sub-region, or extend ``threshold_sensitivity`` to accept a node mask.
 
     For engines using non-custom graph types (ER, BA, etc.), the node IDs
-    refer to the integer indices within the generated graph.  Since the
-    engine does not support per-node threshold overrides via JSON config,
-    this scenario uses the sensitivity_config with seed_nodes set to the
-    specified IDs and a negative perturbation equal to ``vulnerability_delta``.
+    refer to the integer indices within the generated graph.
 
     Parameters
     ----------
@@ -341,8 +347,9 @@ def run_regional_scenarios(
         "vulnerable_nodes": vulnerable_node_ids,
         "vulnerability_delta": vulnerability_delta,
         "description": (
-            f"Regional vulnerability: thresholds reduced by {vulnerability_delta:.2f} "
-            f"for nodes {vulnerable_node_ids} (modelled as negative perturbation)."
+            f"Regional vulnerability: thresholds reduced globally by {vulnerability_delta:.2f}; "
+            f"nodes {vulnerable_node_ids} used as initial failure seeds "
+            f"(perturbation applies to ALL nodes, not per-node)."
         ),
     }
 
