@@ -404,7 +404,7 @@ systemic amplifiers whose failure cascades broadly through the network.</p>
     html += _kv_cards([
         ("Nodes modelled", str(n)),
         ("Mean Fragility Index", f"{fi_mean:.2f}"),
-        ("Max Fragility Index", str(fi_max)),
+        ("Max Fragility Index", f"{fi_max} (Node {worst_node})"),
         ("Worst-case cascade", f"{worst_frac*100:.1f}% of network"),
         ("Ghost Hubs detected", str(n_ghost)),
         ("Propagation mode", mode.capitalize()),
