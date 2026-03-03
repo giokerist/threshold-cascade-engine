@@ -256,6 +256,12 @@ def threshold_sensitivity(
     """
     if mode not in ("deterministic", "stochastic"):
         raise ValueError(f"mode must be 'deterministic' or 'stochastic'; got {mode!r}.")
+    if mode == "stochastic" and stochastic_trials < 2:
+        raise ValueError(
+            f"stochastic_trials must be >= 2 for std computation; got {stochastic_trials}. "
+            f"With a single trial np.std(ddof=1) returns NaN, corrupting sensitivity output. "
+            f"Use stochastic_trials >= 2 (default is 30)."
+        )
 
     n = A.shape[0]
     if seed_nodes is None:
