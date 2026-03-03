@@ -151,8 +151,11 @@ def run_until_stable(
     final_state : np.ndarray, shape (n,)
         State vector at convergence (or at truncation if max_steps was reached).
     time_to_stability : int
-        Number of steps taken until the state stopped changing (0 if S0 is
-        already stable).
+        Step index of the last actual state change (0 if S0 is already
+        stable).  Matches the stochastic engine's convention: it records
+        *when* the final transition happened, not how many change-steps
+        occurred.  For a chain that changes at steps 1 and 5 this returns
+        5, not 2.
     full_state_history : np.ndarray, shape (T+1, n)
         Complete state history including the initial state at row 0.
     convergence_reached : bool
@@ -188,7 +191,8 @@ def run_until_stable(
     history: list[np.ndarray] = [S_current.copy()]
 
     convergence_reached: bool = False
-    for _ in range(max_steps):
+    last_change_step: int = 0  # step index of the last actual state change
+    for step in range(max_steps):
         S_next = propagation_step(S_current, A, theta_deg, theta_fail, D)
 
         # Monotonicity check — step index is len(history) before append
@@ -208,6 +212,7 @@ def run_until_stable(
             convergence_reached = True
             break
 
+        last_change_step = step + 1
         S_current = S_next
     else:
         warnings.warn(
@@ -218,7 +223,9 @@ def run_until_stable(
         )
 
     full_history = np.array(history, dtype=np.int32)  # shape (T+1, n)
-    # time_to_stability = number of steps until first stable state
-    time_to_stability = full_history.shape[0] - 1
+    # time_to_stability = step index of the last actual state change.
+    # Matches the stochastic engine's convention (run_until_stable_stochastic).
+    # 0 if S0 is already stable (no changes occurred).
+    time_to_stability = last_change_step
 
     return S_current, time_to_stability, full_history, convergence_reached
