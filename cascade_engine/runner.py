@@ -125,6 +125,10 @@ def _build_experiment(
     graph_cfg = dict(cfg["graph"])
     if "seed" not in graph_cfg:
         graph_cfg["seed"] = int(cfg["seed"])
+    # Write the resolved seed back into cfg so config_snapshot.json contains the
+    # exact seed that was used.  Without this, visualizer.py's rebuild_graph()
+    # falls back to seed=0 and reconstructs a different graph topology entirely.
+    cfg["graph"]["seed"] = graph_cfg["seed"]
 
     A = graph_from_config(graph_cfg)
     n = A.shape[0]
@@ -512,9 +516,15 @@ def main() -> None:
     _ensure_dir(output_dir)
 
     cfg = load_config(args.config)
-    _save_config_snapshot(output_dir, cfg)
 
+    # _build_experiment must run before _save_config_snapshot so that the
+    # resolved graph seed is written back into cfg['graph']['seed'] first.
+    # Without this, configs that omit graph.seed would have it missing from
+    # the snapshot, causing visualizer.py to rebuild the graph with seed=0
+    # and produce a completely wrong risk heatmap topology.
     A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
+
+    _save_config_snapshot(output_dir, cfg)
 
     # Log experiment metadata (written after successful _build_experiment so
     # that a file-not-found or networkx error does not leave stale metadata
