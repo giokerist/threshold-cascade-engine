@@ -26,16 +26,16 @@ import csv
 import hashlib
 import json
 import sys
+import math
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-from config import load_config, build_rng, generate_thresholds
-from graph import graph_from_config
-from metrics import (
+from .config import load_config, build_rng, generate_thresholds
+from .graph import graph_from_config
+from .metrics import (
     fragility_index,
     fragility_summary,
     cascade_size,
@@ -43,9 +43,9 @@ from metrics import (
     mape,
     spearman_correlation,
 )
-from propagation import run_until_stable
-from monte_carlo import run_monte_carlo_all_seeds, MonteCarloResult
-from sensitivity import (
+from .propagation import run_until_stable
+from .monte_carlo import run_monte_carlo_all_seeds, MonteCarloResult
+from .sensitivity import (
     threshold_sensitivity,
     sensitivity_to_records,
     sensitivity_aggregate_by_perturbation,
@@ -92,6 +92,14 @@ def _config_hash(cfg: dict) -> str:
     return hashlib.sha256(serialised).hexdigest()
 
 
+def _nan_to_none(v):
+    """Replace float NaN with None for valid JSON serialisation."""
+    try:
+        return None if (isinstance(v, float) and math.isnan(v)) else v
+    except TypeError:
+        return v
+
+
 def _save_config_snapshot(output_dir: Path, cfg: dict) -> None:
     snapshot = {
         "config": cfg,
@@ -117,6 +125,10 @@ def _build_experiment(
     graph_cfg = dict(cfg["graph"])
     if "seed" not in graph_cfg:
         graph_cfg["seed"] = int(cfg["seed"])
+    # Write the resolved seed back into cfg so config_snapshot.json contains the
+    # exact seed that was used.  Without this, visualizer.py's rebuild_graph()
+    # falls back to seed=0 and reconstructs a different graph topology entirely.
+    cfg["graph"]["seed"] = graph_cfg["seed"]
 
     A = graph_from_config(graph_cfg)
     n = A.shape[0]
@@ -145,16 +157,49 @@ def _run_deterministic(
     n = A.shape[0]
     print(f"[Tier 1] Deterministic | n={n} nodes")
 
-    # Full cascade reference: every node seeded as failed
-    S_all = np.full(n, 2, dtype=np.int32)
-    full_final, _, _, _ = run_until_stable(S_all, A, theta_deg, theta_fail)
-    full_cs = cascade_size(full_final)
-
     # Fragility index
     t0 = time.perf_counter()
     fi = fragility_index(A, theta_deg, theta_fail)
     elapsed = time.perf_counter() - t0
     fi_sum = fragility_summary(fi)
+
+    # F-007 fix: report top-k worst-case cascades by FI and by in-degree
+    # rather than only argmax(FI), for richer thesis result tables.
+    top_k = min(5, n)
+    top_fi_nodes    = np.argsort(fi)[::-1][:top_k].tolist()
+    top_indeg_nodes = np.argsort(in_degree)[::-1][:top_k].tolist()
+    topk_seed_nodes = list(dict.fromkeys(top_fi_nodes + top_indeg_nodes))
+
+    # Build per-seed cascade stats for the top-k set
+    topk_results = []
+    for sn in topk_seed_nodes:
+        S_seed = np.zeros(n, dtype=np.int32)
+        S_seed[sn] = 2
+        sn_final, _, _, _ = run_until_stable(S_seed, A, theta_deg, theta_fail)
+        sn_cs = cascade_size(sn_final)
+        topk_results.append({
+            "seed_node": sn,
+            "fragility_index": int(fi[sn]),
+            "in_degree": int(in_degree[sn]),
+            "n_affected": sn_cs["n_affected"],
+            "frac_affected": round(sn_cs["frac_affected"], 4),
+            "n_failed": sn_cs["n_failed"],
+            "n_degraded": sn_cs["n_degraded"],
+        })
+
+    # Keep the highest-FI node as the primary "worst case" for summary fields.
+    # topk_results already contains the cascade stats for this node — reuse them
+    # directly to avoid running an identical cascade a second time.
+    highest_fi_node = top_fi_nodes[0]
+    full_cs = next(r for r in topk_results if r["seed_node"] == highest_fi_node)
+
+    # topk_cascade_results.csv  (F-007 fix)
+    _write_csv(
+        output_dir / "topk_cascade_results.csv",
+        ["seed_node", "fragility_index", "in_degree", "n_affected",
+         "frac_affected", "n_failed", "n_degraded"],
+        topk_results,
+    )
 
     # fragility_results.csv
     _write_csv(
@@ -185,11 +230,12 @@ def _run_deterministic(
         "fi_max": fi_sum["max"],
         "full_cascade_n_affected": full_cs["n_affected"],
         "full_cascade_frac_affected": round(full_cs["frac_affected"], 4),
+        "full_cascade_seed_node": highest_fi_node,
     }
     _write_csv(
         output_dir / "results_summary.csv",
         ["metric", "value"],
-        [{"metric": k, "value": v} for k, v in summary_kv.items()],
+        [{"metric": metric_key, "value": v} for metric_key, v in summary_kv.items()],
     )
 
     # summary.json
@@ -200,16 +246,16 @@ def _run_deterministic(
                 "n_nodes": n,
                 "elapsed_seconds": elapsed,
                 "fragility_index": fi_sum,
-                "full_cascade": full_cs,
+                "worst_case_cascade": {**full_cs, "seed_node": highest_fi_node},
             },
             indent=2,
         )
     )
 
-    _print_det_summary(n, elapsed, fi_sum, full_cs)
+    _print_det_summary(n, elapsed, fi_sum, full_cs, highest_fi_node, topk_results)
 
 
-def _print_det_summary(n, elapsed, fi_sum, full_cs):
+def _print_det_summary(n, elapsed, fi_sum, full_cs, highest_fi_node, topk_results=None):
     sep = "-" * 58
     print(sep)
     print("  Cascade Propagation Engine — Tier 1 (Deterministic)")
@@ -225,10 +271,17 @@ def _print_det_summary(n, elapsed, fi_sum, full_cs):
     print(f"    P90    : {fi_sum['p90']:.0f}")
     print(f"    Max    : {fi_sum['max']:.0f}")
     print()
-    print("  Full Cascade (all nodes seeded failed)")
+    print(f"  Worst-Case Cascade (highest-FI node = {highest_fi_node} seeded)")
     print(f"    Affected : {full_cs['n_affected']} / {n}")
     print(f"    Failed   : {full_cs['n_failed']} / {n}")
     print(f"    Degraded : {full_cs['n_degraded']} / {n}")
+    if topk_results:
+        print()
+        print("  Top-k Worst-Case Cascades (by FI + in-degree)")
+        hdr = f"  {'Node':>6}  {'FI':>6}  {'InDeg':>6}  {'Affected':>9}  {'Frac':>6}"
+        print(hdr)
+        for r in topk_results:
+            print(f"  {r['seed_node']:>6}  {r['fragility_index']:>6}  {r['in_degree']:>6}  {r['n_affected']:>9}  {r['frac_affected']:>6.4f}")
     print(sep)
 
 
@@ -341,9 +394,13 @@ def _run_stochastic(
     _write_csv(
         output_dir / "results_summary.csv",
         ["metric", "value"],
-        [{"metric": k2, "value": v} for k2, v in summary_kv.items()],
+        [{"metric": metric_key, "value": v} for metric_key, v in summary_kv.items()],
     )
-    (output_dir / "summary.json").write_text(json.dumps(summary_kv, indent=2))
+    # summary.json — replace any NaN values with None so output is valid JSON.
+    # NaN arises when spearman_rho is undefined (e.g. all cascade sizes identical
+    # at very low k), causing json.dumps to emit the non-standard NaN literal.
+    summary_kv_serialisable = {metric_key: _nan_to_none(v) for metric_key, v in summary_kv.items()}
+    (output_dir / "summary.json").write_text(json.dumps(summary_kv_serialisable, indent=2))
 
     _print_stochastic_summary(n, trials, k, elapsed_mc, mc_mean_cs, rmse_val, mape_val, spearman)
 
@@ -396,14 +453,18 @@ def _run_sensitivity(
     perturbations: list[float] = sens_cfg.get(
         "perturbation_values", [-0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2]
     )
-    # Default: up to 20 highest in-degree nodes as seeds
-    max_seed_nodes: int = int(sens_cfg.get("max_seed_nodes", min(n, 20)))
-    in_deg = A.sum(axis=0).astype(np.int64)
-    seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
+    # If sensitivity_config provides an explicit seed_nodes list, use it.
+    # Otherwise fall back to the top max_seed_nodes by in-degree.
+    if "seed_nodes" in sens_cfg:
+        seed_nodes = [int(x) for x in sens_cfg["seed_nodes"]]
+    else:
+        max_seed_nodes: int = int(sens_cfg.get("max_seed_nodes", min(n, 20)))
+        in_deg = A.sum(axis=0).astype(np.int64)
+        seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
-    stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 20))
-    # Offset the sensitivity seed well beyond the Monte Carlo seed space
-    # (MC uses seeds up to master_seed + n * trials) to ensure RNG independence.
+    stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 30))
+    # Use a well-separated seed for sensitivity so its SeedSequence tree is
+    # statistically independent from the Monte Carlo SeedSequence tree (F-006).
     master_seed: int = int(cfg["seed"]) + 10_000_000
 
     print(
@@ -429,6 +490,7 @@ def _run_sensitivity(
         [
             "perturbation", "seed_node", "cascade_size_fraction",
             "time_to_stability", "n_trials", "std_cascade_size",
+            "clamp_mode", "n_nodes_clamped",
         ],
         sensitivity_to_records(points),
     )
@@ -436,7 +498,8 @@ def _run_sensitivity(
     # Aggregated CSV
     _write_csv(
         output_dir / "sensitivity_aggregate.csv",
-        ["perturbation", "mean_cascade_size", "std_cascade_size", "n_seed_nodes"],
+        ["perturbation", "mean_cascade_size", "std_cascade_size", "n_seed_nodes",
+         "clamp_mode", "n_nodes_clamped"],
         sensitivity_aggregate_by_perturbation(points),
     )
     print("[Sensitivity] Wrote sensitivity_results.csv and sensitivity_aggregate.csv")
@@ -453,9 +516,19 @@ def main() -> None:
     _ensure_dir(output_dir)
 
     cfg = load_config(args.config)
+
+    # _build_experiment must run before _save_config_snapshot so that the
+    # resolved graph seed is written back into cfg['graph']['seed'] first.
+    # Without this, configs that omit graph.seed would have it missing from
+    # the snapshot, causing visualizer.py to rebuild the graph with seed=0
+    # and produce a completely wrong risk heatmap topology.
+    A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
+
     _save_config_snapshot(output_dir, cfg)
 
-    # Log experiment metadata
+    # Log experiment metadata (written after successful _build_experiment so
+    # that a file-not-found or networkx error does not leave stale metadata
+    # alongside config_snapshot.json with no corresponding results.)
     (output_dir / "experiment_metadata.json").write_text(
         json.dumps(
             {
@@ -467,8 +540,6 @@ def main() -> None:
             indent=2,
         )
     )
-
-    A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
     mode: str = str(cfg.get("propagation_mode", "deterministic"))
 
     if mode == "deterministic":

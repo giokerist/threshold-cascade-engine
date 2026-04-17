@@ -17,7 +17,8 @@ from __future__ import annotations
 import numpy as np
 import scipy.stats as _scipy_stats
 
-from propagation import run_until_stable, STATE_FAILED, STATE_DEGRADED
+from .propagation import run_until_stable, STATE_FAILED, STATE_DEGRADED
+from .utils import confidence_interval as _shared_confidence_interval
 
 
 # ---------------------------------------------------------------------------
@@ -60,23 +61,6 @@ def cascade_size(final_state: np.ndarray) -> dict[str, int | float]:
         "frac_failed": n_failed / n if n > 0 else 0.0,
         "frac_affected": n_affected / n if n > 0 else 0.0,
     }
-
-
-def time_to_stability(history: np.ndarray) -> int:
-    """Extract the number of propagation steps until stabilisation.
-
-    Parameters
-    ----------
-    history : np.ndarray, shape (T+1, n)
-        Full state history as returned by ``run_until_stable``.  Row 0 is
-        the initial state; subsequent rows are post-step states.
-
-    Returns
-    -------
-    int
-        Number of steps taken (= T).
-    """
-    return int(history.shape[0]) - 1
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +267,8 @@ def confidence_interval(
 ) -> tuple[float, float]:
     """Compute a confidence interval for the population mean via t-distribution.
 
+    Delegates to utils.confidence_interval (F-004 fix: single source of truth).
+
     Parameters
     ----------
     samples : np.ndarray, shape (m,)
@@ -293,25 +279,6 @@ def confidence_interval(
     Returns
     -------
     (ci_low, ci_high) : tuple of float
-        Lower and upper bounds of the CI.
-
-    Raises
-    ------
-    ValueError
-        If m < 2 or confidence is not in (0, 1).
-
-    Notes
-    -----
-    Identical to ``monte_carlo.confidence_interval``; re-implemented here
-    to keep metrics.py self-contained without a circular import.
+        Lower and upper bounds.
     """
-    samples = np.asarray(samples, dtype=np.float64)
-    m = len(samples)
-    if m < 2:
-        raise ValueError("Need at least 2 samples for CI computation.")
-    if not (0 < confidence < 1):
-        raise ValueError(f"confidence must be in (0, 1); got {confidence}.")
-    mean = float(np.mean(samples))
-    se = float(_scipy_stats.sem(samples))
-    interval = _scipy_stats.t.interval(confidence, df=m - 1, loc=mean, scale=se)
-    return float(interval[0]), float(interval[1])
+    return _shared_confidence_interval(samples, confidence)

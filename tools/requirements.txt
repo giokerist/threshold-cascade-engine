@@ -1,0 +1,5 @@
+# Dependencies for the consultancy wrapper tools (tools/*.py)
+# These are in addition to the core cascade_engine dependencies
+# listed in cascade_engine/requirements.txt.
+pandas>=1.3.0
+seaborn>=0.11.0

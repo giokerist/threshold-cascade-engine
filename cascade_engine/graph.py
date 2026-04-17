@@ -8,6 +8,7 @@ so column i of A contains the in-neighbors of node i.
 
 from __future__ import annotations
 
+import warnings
 from typing import Sequence
 
 import networkx as nx
@@ -100,6 +101,17 @@ def generate_barabasi_albert(n: int, m: int, seed: int) -> np.ndarray:
     NetworkX produces an undirected BA graph; edges are symmetrised into a
     directed graph (each undirected edge becomes two directed edges).
 
+    **F-005 note — symmetric bidirectional dependencies:**
+    This means every BA experiment uses *symmetric* directed dependencies:
+    if A depends on B, then B also depends on A.  This is appropriate for
+    peer-to-peer or fully-coupled infrastructure models but may overstate
+    cascade speed compared to asymmetric directed dependencies.  To model
+    asymmetric BA graphs, pass directed=True to an explicit
+    nx.DiGraph constructor with preferential attachment logic, or
+    post-process the adjacency matrix to remove lower-triangular entries.
+    The current symmetric convention must be acknowledged in any thesis
+    section reporting BA experiments.
+
     Parameters
     ----------
     n : int
@@ -114,7 +126,13 @@ def generate_barabasi_albert(n: int, m: int, seed: int) -> np.ndarray:
     np.ndarray, shape (n, n), dtype uint8
         Symmetric adjacency matrix.
     """
-    G: nx.Graph = nx.barabasi_albert_graph(n, m, seed=seed)
+    try:
+        G: nx.Graph = nx.barabasi_albert_graph(n, m, seed=seed)
+    except Exception as exc:
+        raise ValueError(
+            f"generate_barabasi_albert: invalid parameters n={n}, m={m}. "
+            f"BA graph requires 1 <= m < n. Original error: {exc}"
+        ) from exc
     A = _undirected_to_directed_adjacency(G, n)
     np.fill_diagonal(A, 0)
     return A
@@ -141,7 +159,13 @@ def generate_watts_strogatz(n: int, k: int, p: float, seed: int) -> np.ndarray:
     np.ndarray, shape (n, n), dtype uint8
         Symmetric adjacency matrix.
     """
-    G: nx.Graph = nx.watts_strogatz_graph(n, k, p, seed=seed)
+    try:
+        G: nx.Graph = nx.watts_strogatz_graph(n, k, p, seed=seed)
+    except Exception as exc:
+        raise ValueError(
+            f"generate_watts_strogatz: invalid parameters n={n}, k={k}, p={p}. "
+            f"WS graph requires k < n and 0 <= p <= 1. Original error: {exc}"
+        ) from exc
     A = _undirected_to_directed_adjacency(G, n)
     np.fill_diagonal(A, 0)
     return A
@@ -166,18 +190,66 @@ def generate_custom(n: int, edge_list: Sequence[tuple[int, int]]) -> np.ndarray:
     ------
     ValueError
         If any node index is out of range [0, n-1].
+
+    Warns
+    -----
+    UserWarning
+        If self-loops are present (they are stripped before building the
+        adjacency matrix).  A self-loop causes node i to count itself as a
+        failed in-neighbor, artificially inflating F_i and corrupting
+        fragility results.
+    UserWarning
+        If duplicate edges are present (collapsed to a single edge each).
+        This model does not support edge multiplicity; each dependency is
+        binary (present or absent).
     """
+    # --- out-of-range check ---
     for u, v in edge_list:
         if not (0 <= u < n and 0 <= v < n):
             raise ValueError(
                 f"Edge ({u}, {v}) contains a node index out of range [0, {n - 1}]."
             )
 
+    # --- self-loop detection ---
+    self_loops = [(u, v) for u, v in edge_list if u == v]
+    if self_loops:
+        warnings.warn(
+            f"generate_custom: {len(self_loops)} self-loop(s) detected and stripped: "
+            f"{self_loops[:10]}{'...' if len(self_loops) > 10 else ''}. "
+            f"Self-loops are not valid in this cascade model — a node cannot be "
+            f"its own in-neighbor. They inflate failure pressure F_i and corrupt "
+            f"fragility results. Remove them from your edge list.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # --- duplicate edge detection (after removing self-loops) ---
+    clean_edges = [(u, v) for u, v in edge_list if u != v]
+    seen: set[tuple[int, int]] = set()
+    duplicates: list[tuple[int, int]] = []
+    for u, v in clean_edges:
+        if (u, v) in seen:
+            duplicates.append((u, v))
+        else:
+            seen.add((u, v))
+    if duplicates:
+        unique_dups = list(dict.fromkeys(duplicates))
+        warnings.warn(
+            f"generate_custom: {len(duplicates)} duplicate edge(s) detected and "
+            f"collapsed to a single edge each: "
+            f"{unique_dups[:10]}{'...' if len(unique_dups) > 10 else ''}. "
+            f"This model does not support edge multiplicity — each dependency is "
+            f"either present (1) or absent (0). Duplicate entries do not strengthen "
+            f"the dependency.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     G: nx.DiGraph = nx.DiGraph()
     G.add_nodes_from(range(n))
-    G.add_edges_from(edge_list)
+    G.add_edges_from(clean_edges)
     A = _digraph_to_adjacency(G, n)
-    np.fill_diagonal(A, 0)
+    np.fill_diagonal(A, 0)  # belt-and-suspenders: ensure diagonal is clean
     return A
 
 
