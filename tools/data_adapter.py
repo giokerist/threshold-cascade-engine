@@ -2,19 +2,27 @@
 """
 data_adapter.py — Consultancy Wrapper: Ingestor
 ================================================
-Convert a CSV edgelist into a cascade_engine-compatible JSON configuration file.
+Convert a client edgelist (CSV **or Excel**) into a cascade_engine-compatible
+JSON configuration file.
 
-The CSV must contain at minimum two columns: ``source`` and ``target``.
+Supported input formats
+-----------------------
+* **CSV** (``.csv``) — any delimiter readable by pandas.
+* **Excel** (``.xlsx``, ``.xls``) — requires ``openpyxl`` (included in
+  ``tools/requirements.txt``).  Use ``--sheet-name`` to pick a specific sheet;
+  defaults to the first sheet.
+
+The file must contain at minimum two columns: ``source`` and ``target``.
 An optional ``weight`` column is accepted and recorded in output metadata,
 but the current engine is unweighted — weights are stored for documentation
 purposes only and do not affect simulation logic.
 
-Node IDs in the CSV may be any non-negative integers or string labels.
+Node IDs may be any non-negative integers or string labels.
 They are re-mapped to a compact 0-indexed integer space automatically.
 
 Usage examples
 --------------
-# Minimal — all thresholds at their defaults
+# Minimal — from CSV, all thresholds at their defaults
 python3 data_adapter.py edges.csv --output config_custom.json
 
 # Full control
@@ -61,41 +69,75 @@ DEFAULT_SENSITIVITY_CONFIG = {
 }
 
 
+# Recognised Excel file extensions
+_EXCEL_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb"}
+
+
 # ---------------------------------------------------------------------------
-# CSV ingestion
+# File ingestion (CSV + Excel)
 # ---------------------------------------------------------------------------
 
 
-def load_edgelist(csv_path: Path) -> pd.DataFrame:
-    """Load and validate an edgelist CSV.
+def load_edgelist(
+    path: Path,
+    sheet_name: "str | int | None" = None,
+) -> "tuple[pd.DataFrame, str]":
+    """Load and validate an edgelist from a CSV or Excel file.
 
     Parameters
     ----------
-    csv_path : Path
-        Path to the CSV file.
+    path : Path
+        Path to a CSV (``.csv``) or Excel (``.xlsx`` / ``.xls``) file.
+    sheet_name : str, int, or None
+        For Excel only: sheet name or 0-based integer index to load.
+        ``None`` (default) selects the first sheet.
+        Ignored for CSV files.
 
     Returns
     -------
-    pd.DataFrame
-        Validated DataFrame with columns at least ``source`` and ``target``.
+    (df, file_format) : tuple
+        ``df``          — validated DataFrame with ``source`` and ``target`` columns.
+        ``file_format`` — ``'csv'`` or ``'excel'``.
 
     Raises
     ------
     FileNotFoundError
-        If the CSV file does not exist.
+        If the file does not exist.
     ValueError
-        If required columns are missing, or the file is empty / malformed.
+        If required columns are missing, the file is empty, or parsing fails.
+    ImportError
+        If an Excel file is supplied but ``openpyxl`` is not installed.
     """
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Input CSV not found: {csv_path}")
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found: {path}")
 
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as exc:
-        raise ValueError(f"Failed to parse CSV '{csv_path}': {exc}") from exc
+    suffix = path.suffix.lower()
+    is_excel = suffix in _EXCEL_SUFFIXES
+
+    if is_excel:
+        import importlib
+        try:
+            importlib.import_module("openpyxl")
+        except ImportError as exc:
+            raise ImportError(
+                "Reading Excel files requires openpyxl. "
+                "Install it with: pip install openpyxl"
+            ) from exc
+        try:
+            _sheet = sheet_name if sheet_name is not None else 0
+            df = pd.read_excel(path, sheet_name=_sheet)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse Excel file '{path}': {exc}") from exc
+        file_format = "excel"
+    else:
+        try:
+            df = pd.read_csv(path)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse CSV '{path}': {exc}") from exc
+        file_format = "csv"
 
     if df.empty:
-        raise ValueError(f"CSV '{csv_path}' contains no rows.")
+        raise ValueError(f"File '{path}' contains no rows.")
 
     # Normalise column names: strip whitespace and lower-case
     df.columns = [c.strip().lower() for c in df.columns]
@@ -103,7 +145,7 @@ def load_edgelist(csv_path: Path) -> pd.DataFrame:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(
-            f"CSV is missing required column(s): {sorted(missing)}. "
+            f"File is missing required column(s): {sorted(missing)}. "
             f"Found: {sorted(df.columns.tolist())}."
         )
 
@@ -112,12 +154,16 @@ def load_edgelist(csv_path: Path) -> pd.DataFrame:
     df = df.dropna(subset=["source", "target"])
     dropped = before - len(df)
     if dropped:
-        print(f"  [data_adapter] Warning: dropped {dropped} row(s) with missing source/target.", file=sys.stderr)
+        print(
+            f"  [data_adapter] Warning: dropped {dropped} row(s) with "
+            "missing source/target.",
+            file=sys.stderr,
+        )
 
     if df.empty:
         raise ValueError("No valid edges remain after dropping NA rows.")
 
-    return df
+    return df, file_format
 
 
 # ---------------------------------------------------------------------------
@@ -194,12 +240,20 @@ def build_edge_list(
     mapping = node_mapping["mapping"]
 
     # Normalise raw IDs to the type used in the mapping
+    # Determine key type from the mapping once; convert all raw values to match.
+    # Guards against pandas reading integer CSV columns as float64 (1.0 vs 1)
+    # or mixed-type columns delivered as strings ("1" vs 1).
+    first_key = next(iter(mapping))
+    _key_is_int = isinstance(first_key, int)
+
     def _resolve(raw):
-        try:
-            key = int(raw)
-        except (ValueError, TypeError):
-            key = str(raw)
-        return mapping[key]
+        if _key_is_int:
+            try:
+                return mapping[int(raw)]
+            except (ValueError, TypeError, KeyError):
+                return mapping[int(str(raw).strip())]
+        else:
+            return mapping[str(raw).strip()]
 
     raw_edges = [(_resolve(r["source"]), _resolve(r["target"])) for _, r in df.iterrows()]
 
@@ -359,13 +413,14 @@ def assemble_config(
 
 
 def print_summary(
-    csv_path: Path,
+    input_path: Path,
     output_path: Path,
     df: pd.DataFrame,
     node_info: dict,
     edge_list: list,
     n_self_loops: int,
     n_duplicates: int,
+    file_format: str = "csv",
 ) -> None:
     """Print a concise ingestion summary to stdout."""
     n = node_info["n"]
@@ -373,12 +428,12 @@ def print_summary(
     print(sep)
     print("  data_adapter — Ingestion Summary")
     print(sep)
-    print(f"  Source CSV       : {csv_path}")
+    print(f"  Source file      : {input_path}  [{file_format.upper()}]")
     print(f"  Output config    : {output_path}")
-    print(f"  Raw CSV rows     : {len(df)}")
+    print(f"  Raw rows read    : {len(df)}")
     print(f"  Nodes detected   : {n}")
     print(f"  Directed edges   : {len(edge_list)}")
-    print(f"  Self-loops dropped   : {n_self_loops}")
+    print(f"  Self-loops dropped        : {n_self_loops}")
     print(f"  Duplicate edges collapsed : {n_duplicates}")
     if node_info["remapped"]:
         print(f"  Node ID remapping : YES — labels mapped to 0–{n - 1}")
@@ -405,7 +460,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # --- Positional ---
-    p.add_argument("input", type=Path, help="Path to the input CSV edgelist file.")
+    p.add_argument(
+        "input",
+        type=Path,
+        help="Path to the input edgelist file (CSV or Excel: .csv, .xlsx, .xls).",
+    )
 
     # --- Output ---
     p.add_argument(
@@ -414,6 +473,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("config_custom.json"),
         metavar="PATH",
         help="Path for the output JSON config file (default: config_custom.json).",
+    )
+
+    # --- Excel options ---
+    p.add_argument(
+        "--sheet-name",
+        dest="sheet_name",
+        default=None,
+        metavar="SHEET",
+        help=(
+            "For Excel input: sheet name or 0-based integer index to load "
+            "(default: first sheet). Ignored for CSV files."
+        ),
     )
 
     # --- Simulation mode ---
@@ -485,11 +556,12 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # ── 1. Load CSV ──────────────────────────────────────────────────────────
-    print(f"  [data_adapter] Reading CSV: {args.input}")
+    # ── 1. Load input file (CSV or Excel) ────────────────────────────────────
+    fmt_label = "Excel" if args.input.suffix.lower() in _EXCEL_SUFFIXES else "CSV"
+    print(f"  [data_adapter] Reading {fmt_label}: {args.input}")
     try:
-        df = load_edgelist(args.input)
-    except (FileNotFoundError, ValueError) as exc:
+        df, file_format = load_edgelist(args.input, sheet_name=args.sheet_name)
+    except (FileNotFoundError, ValueError, ImportError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -534,7 +606,8 @@ def main() -> None:
     # ── 6. Provenance metadata ────────────────────────────────────────────────
     has_weight = OPTIONAL_WEIGHT_COLUMN in df.columns
     adapter_meta = {
-        "source_csv": str(args.input.resolve()),
+        "source_file": str(args.input.resolve()),
+        "file_format": file_format,
         "n_raw_rows": len(df),
         "n_nodes": n,
         "n_edges": len(edge_list),
@@ -561,7 +634,10 @@ def main() -> None:
     output_path.write_text(json.dumps(cfg, indent=2))
 
     # ── 8. Summary ────────────────────────────────────────────────────────────
-    print_summary(args.input, output_path, df, node_info, edge_list, n_self_loops, n_duplicates)
+    print_summary(
+        args.input, output_path, df, node_info, edge_list,
+        n_self_loops, n_duplicates, file_format=file_format,
+    )
     print(f"\n  Config written to: {output_path.resolve()}")
     print(f"  Run with: python3 -m cascade_engine.runner {output_path} --output-dir results/\n")
 
