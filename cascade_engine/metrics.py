@@ -119,6 +119,88 @@ def fragility_index(
 
 
 # ---------------------------------------------------------------------------
+# Fragility index — sparse fast path (for real-world CSV graphs)
+# ---------------------------------------------------------------------------
+
+
+def fragility_index_fast(
+    A_T,
+    in_degree: np.ndarray,
+    theta_deg: np.ndarray,
+    theta_fail: np.ndarray,
+    max_steps: int | None = None,
+    progress_cb=None,
+    status_cb=None,
+    step: int = 500,
+) -> tuple[np.ndarray, list]:
+    """Compute the fragility index using the sparse CSR engine.
+
+    Drop-in replacement for ``fragility_index`` that accepts a SciPy CSR
+    matrix (``A_T``) instead of a dense NumPy array.  Uses
+    ``run_until_stable_fast`` for each seed node, which dispatches to the
+    Numba JIT kernel when available and the SciPy sparse matvec path otherwise.
+
+    For a graph with n nodes and E edges, the cost per seed is
+    O(E × steps_to_convergence) instead of O(n²) — typically 10–100×
+    faster for sparse real-world graphs.
+
+    Parameters
+    ----------
+    A_T : scipy.sparse.csr_matrix, shape (n, n)
+        Transpose adjacency matrix from ``graph_sparse.build_sparse_graph``.
+        Row ``i`` of ``A_T`` = in-neighbours of node ``i``.
+    in_degree : np.ndarray, shape (n,), dtype float64
+        In-degree per node.
+    theta_deg : np.ndarray, shape (n,), dtype float64
+        Degradation threshold per node.
+    theta_fail : np.ndarray, shape (n,), dtype float64
+        Failure threshold per node.
+    max_steps : int or None, optional
+        Per-seed step cap.  Defaults to ``2 * n``.
+    progress_cb : callable(int) or None, optional
+        Called with the current node index every ``step`` nodes.
+        Intended for UI progress bars: ``lambda done: progress_bar.update(done)``.
+    status_cb : callable(str) or None, optional
+        Called with a human-readable status string every ``step`` nodes.
+    step : int, optional
+        Interval (in nodes) between ``progress_cb`` / ``status_cb`` calls.
+        Default 500.
+
+    Returns
+    -------
+    fi : np.ndarray, shape (n,), dtype int64
+        ``fi[i]`` = number of nodes affected (state >= DEGRADED) when node
+        ``i`` alone is seeded as failed.  Includes node ``i`` itself.
+    topk_results : list
+        Empty list (reserved for future use; keeps the signature extensible).
+    """
+    from .propagation_fast import run_until_stable_fast
+
+    n = A_T.shape[0]
+    fi = np.empty(n, dtype=np.int64)
+
+    for i in range(n):
+        S0 = np.zeros(n, dtype=np.int32)
+        S0[i] = STATE_FAILED
+
+        final_state, _, _, _ = run_until_stable_fast(
+            S0, A_T, in_degree, theta_deg, theta_fail,
+            max_steps=max_steps,
+            use_numba=True,
+        )
+
+        fi[i] = int(np.sum(final_state >= STATE_DEGRADED))
+
+        if i % step == 0:
+            if progress_cb is not None:
+                progress_cb(i)
+            if status_cb is not None:
+                status_cb(f"Fragility index: {i:,} / {n:,} nodes processed…")
+
+    return fi, []
+
+
+# ---------------------------------------------------------------------------
 # Aggregate fragility summary
 # ---------------------------------------------------------------------------
 
