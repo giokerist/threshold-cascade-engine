@@ -33,7 +33,14 @@ from cascade_engine.runner import (
     _run_deterministic,
     _run_stochastic,
     _ensure_dir,
+    _write_csv,
 )
+from cascade_engine.config import build_rng, generate_thresholds
+from cascade_engine.graph_sparse import build_or_load_sparse_graph
+from cascade_engine.ingestion import _compute_edge_hash
+from cascade_engine.propagation_fast import run_until_stable_fast
+from cascade_engine.metrics import fragility_summary, cascade_size, fragility_index_fast
+from cascade_engine.progress import ProgressTracker
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config (must be first Streamlit call)
@@ -288,27 +295,40 @@ def _build_graph_from_csv(
     df["__src__"] = _compose_node_key(df, src_cols)
     df["__tgt__"] = _compose_node_key(df, tgt_cols)
 
-    # Build sorted unique node list → deterministic 0-indexed mapping
-    all_nodes = sorted(set(df["__src__"].tolist() + df["__tgt__"].tolist()))
-    name_to_id = {name: idx for idx, name in enumerate(all_nodes)}
-    id_to_name = {idx: name for name, idx in name_to_id.items()}
-    n_nodes = len(all_nodes)
+    # Build unified integer ID space via pd.factorize — one vectorised pass,
+    # no Python loops, no sorted(set(...)) over a Python list.
+    all_labels = pd.concat([df["__src__"], df["__tgt__"]], ignore_index=True)
+    codes, uniques = pd.factorize(all_labels)
+    n_half = len(df)
+    src_codes = codes[:n_half].astype(np.int64)
+    tgt_codes = codes[n_half:].astype(np.int64)
+
+    name_to_id: dict[str, int] = {label: int(idx) for idx, label in enumerate(uniques)}
+    id_to_name: dict[int, str] = {int(idx): label for idx, label in enumerate(uniques)}
+    n_nodes = len(uniques)
 
     status_cb(
         f"Composed node labels from {src_cols} → {tgt_cols}. "
         f"Mapped {n_nodes:,} unique nodes to integer IDs."
     )
 
-    # Unique directed edges (self-loops silently dropped)
-    edge_pairs = df[["__src__", "__tgt__"]].drop_duplicates()
-    edges = [
-        [name_to_id[r["__src__"]], name_to_id[r["__tgt__"]]]
-        for _, r in edge_pairs.iterrows()
-        if r["__src__"] != r["__tgt__"]
-    ]
+    # Build edge arrays vectorised — no iterrows, no Python dict lookups per row.
+    # Assign raw codes back to a temporary frame and deduplicate + drop self-loops.
+    df = df.copy()
+    df["__src_id__"] = src_codes
+    df["__tgt_id__"] = tgt_codes
+    edge_df = (
+        df[["__src_id__", "__tgt_id__"]]
+        .query("__src_id__ != __tgt_id__")
+        .drop_duplicates()
+    )
+    src_ids = edge_df["__src_id__"].to_numpy(dtype=np.int64)
+    tgt_ids = edge_df["__tgt_id__"].to_numpy(dtype=np.int64)
+    # Keep a plain Python list-of-lists only for config.json serialisation
+    edges = list(zip(src_ids.tolist(), tgt_ids.tolist()))
 
     status_cb(f"Built {len(edges):,} unique directed edges.")
-    return edges, name_to_id, id_to_name, n_nodes
+    return edges, src_ids, tgt_ids, name_to_id, id_to_name, n_nodes
 
 
 def _generate_config(
@@ -341,25 +361,153 @@ def _generate_config(
     }
 
 
-def _run_simulation(cfg: dict, status_cb, progress_cb) -> Path:
-    """
-    Run the cascade engine in-process and return the output directory.
-    """
-    progress_cb(0.4)
-    status_cb("Building adjacency matrix and threshold arrays…")
+def _run_simulation(
+    src_ids: np.ndarray,
+    tgt_ids: np.ndarray,
+    n_nodes: int,
+    cfg: dict,
+    status_cb,
+    progress_cb,
+) -> Path:
+    """Run the cascade engine using the sparse fast path.
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        A, theta_deg, theta_fail, in_degree = _build_experiment(cfg)
+    Replaces the legacy _build_experiment → generate_custom → nx.to_numpy_array
+    pipeline (which allocates an n×n dense matrix) with:
+      1. build_or_load_sparse_graph  → CSR A_T (bytes, not gigabytes)
+      2. fragility_index_fast        → run_until_stable_fast per seed node
+      3. Same output files as _run_deterministic / _run_stochastic
+    """
+    import json, time as _time
+    from cascade_engine.propagation import STATE_FAILED
 
-    progress_cb(0.65)
     mode = cfg.get("propagation_mode", "deterministic")
-    status_cb(f"Running {mode} propagation on {A.shape[0]} nodes…")
+    n = n_nodes
+
+    # ── 1. Build sparse graph (load from cache if edges unchanged) ────────────
+    progress_cb(0.40)
+    status_cb("Building sparse CSR adjacency matrix…")
+    edge_hash = _compute_edge_hash(src_ids, tgt_ids)
+    A_T, in_degree = build_or_load_sparse_graph(
+        src_ids, tgt_ids, n,
+        edge_hash=edge_hash,
+        cache_dir=str(OUTPUT_DIR / ".cascade_cache"),
+    )
+    status_cb(
+        f"Sparse graph ready — {A_T.nnz:,} edges, "
+        f"{A_T.data.nbytes / 1e6:.1f} MB (was {n*n/1e9:.2f} GB dense)."
+    )
+
+    # ── 2. Generate thresholds ────────────────────────────────────────────────
+    progress_cb(0.50)
+    status_cb("Generating threshold arrays…")
+    rng = build_rng(cfg)
+    theta_deg, theta_fail = generate_thresholds(n, cfg["thresholds"], rng)
+
+    # ── 3. Run simulation ─────────────────────────────────────────────────────
+    progress_cb(0.55)
 
     if mode == "deterministic":
-        _run_deterministic(cfg, A, theta_deg, theta_fail, in_degree, OUTPUT_DIR)
+        status_cb(f"Computing fragility index for {n:,} nodes (sparse engine)…")
+        t0 = _time.perf_counter()
+
+        # Progress tracker fires status updates every 5%
+        _step = max(1, n // 20)
+        fi_arr, topk_results = fragility_index_fast(
+            A_T, in_degree, theta_deg, theta_fail,
+            progress_cb=lambda done: progress_cb(0.55 + 0.38 * done / n),
+            status_cb=lambda msg: status_cb(msg),
+            step=_step,
+        )
+        elapsed = _time.perf_counter() - t0
+        status_cb(f"Fragility index done in {elapsed:.1f}s.")
+
+        fi_sum = fragility_summary(fi_arr)
+
+        # top-k worst case cascades (reuse topk_results from fragility_index_fast)
+        top_fi_nodes    = np.argsort(fi_arr)[::-1][:5].tolist()
+        top_indeg_nodes = np.argsort(in_degree)[::-1][:5].tolist()
+        topk_seed_nodes = list(dict.fromkeys(top_fi_nodes + top_indeg_nodes))
+
+        # fragility_index_fast already ran all-nodes; grab topk from fi_arr
+        topk_out = []
+        for sn in topk_seed_nodes:
+            S0 = np.zeros(n, dtype=np.int32)
+            S0[sn] = STATE_FAILED
+            final, _, _, _ = run_until_stable_fast(S0, A_T, in_degree, theta_deg, theta_fail)
+            cs = cascade_size(final)
+            topk_out.append({
+                "seed_node": sn,
+                "fragility_index": int(fi_arr[sn]),
+                "in_degree": int(in_degree[sn]),
+                "n_affected": cs["n_affected"],
+                "frac_affected": round(cs["frac_affected"], 4),
+                "n_failed": cs["n_failed"],
+                "n_degraded": cs["n_degraded"],
+            })
+
+        highest_fi_node = top_fi_nodes[0]
+        full_cs = next(r for r in topk_out if r["seed_node"] == highest_fi_node)
+
+        _ensure_dir(OUTPUT_DIR)
+
+        _write_csv(
+            OUTPUT_DIR / "topk_cascade_results.csv",
+            ["seed_node", "fragility_index", "in_degree", "n_affected",
+             "frac_affected", "n_failed", "n_degraded"],
+            topk_out,
+        )
+        _write_csv(
+            OUTPUT_DIR / "fragility_results.csv",
+            ["node_id", "fragility_index", "theta_deg", "theta_fail", "in_degree"],
+            [
+                {
+                    "node_id": i,
+                    "fragility_index": int(fi_arr[i]),
+                    "theta_deg": float(theta_deg[i]),
+                    "theta_fail": float(theta_fail[i]),
+                    "in_degree": int(in_degree[i]),
+                }
+                for i in range(n)
+            ],
+        )
+        summary_kv = {
+            "mode": "deterministic",
+            "n_nodes": n,
+            "elapsed_fragility_s": round(elapsed, 4),
+            "fi_mean": round(fi_sum["mean"], 4),
+            "fi_std": round(fi_sum["std"], 4),
+            "fi_min": fi_sum["min"],
+            "fi_median": fi_sum["median"],
+            "fi_p90": fi_sum["p90"],
+            "fi_max": fi_sum["max"],
+            "full_cascade_n_affected": full_cs["n_affected"],
+            "full_cascade_frac_affected": round(full_cs["frac_affected"], 4),
+            "full_cascade_seed_node": highest_fi_node,
+        }
+        _write_csv(
+            OUTPUT_DIR / "results_summary.csv",
+            ["metric", "value"],
+            [{"metric": k, "value": v} for k, v in summary_kv.items()],
+        )
+        (OUTPUT_DIR / "summary.json").write_text(
+            json.dumps({
+                "mode": "deterministic",
+                "n_nodes": n,
+                "elapsed_seconds": elapsed,
+                "fragility_index": fi_sum,
+                "worst_case_cascade": {**full_cs, "seed_node": highest_fi_node},
+            }, indent=2)
+        )
+
     else:
-        _run_stochastic(cfg, A, theta_deg, theta_fail, in_degree, OUTPUT_DIR)
+        # Stochastic mode: build a dense matrix only if n is small enough,
+        # otherwise warn and fall back to the parallel sparse Monte Carlo path.
+        progress_cb(0.55)
+        status_cb(f"Running stochastic propagation on {n:,} nodes…")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            A, theta_deg_d, theta_fail_d, in_degree_d = _build_experiment(cfg)
+        _run_stochastic(cfg, A, theta_deg_d, theta_fail_d, in_degree_d, OUTPUT_DIR)
 
     progress_cb(0.95)
     return OUTPUT_DIR
@@ -588,7 +736,7 @@ if run_btn:
         progress(0.05)
         status("Parsing CSV and mapping node identifiers…")
 
-        edges, name_to_id, id_to_name, n_nodes = _build_graph_from_csv(
+        edges, src_ids, tgt_ids, name_to_id, id_to_name, n_nodes = _build_graph_from_csv(
             uploaded_file, src_cols, tgt_cols, fi_cols, status
         )
 
@@ -622,7 +770,7 @@ if run_btn:
         }
 
         # Run engine
-        _run_simulation(cfg, status, progress)
+        _run_simulation(src_ids, tgt_ids, n_nodes, cfg, status, progress)
 
         elapsed = time.perf_counter() - t0
 
