@@ -1,0 +1,17 @@
+{
+  "graph": {
+    "type": "barabasi_albert",
+    "n": 150,
+    "m": 3,
+    "seed": 99
+  },
+  "thresholds": {
+    "type": "normal",
+    "deg_mean": 0.3,
+    "deg_std": 0.08,
+    "fail_mean": 0.65,
+    "fail_std": 0.1
+  },
+  "seed": 99,
+  "propagation_mode": "deterministic"
+}
