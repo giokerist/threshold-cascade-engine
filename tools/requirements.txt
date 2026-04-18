@@ -3,3 +3,4 @@
 # listed in cascade_engine/requirements.txt.
 pandas>=1.3.0
 seaborn>=0.11.0
+openpyxl>=3.0.0   # Excel (.xlsx/.xls) ingestion via data_adapter.py
