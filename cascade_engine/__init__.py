@@ -53,7 +53,7 @@ from .stochastic_propagation import (
     sigmoid,
 )
 from .monte_carlo import run_monte_carlo, run_monte_carlo_all_seeds, MonteCarloResult
-from .metrics import fragility_index, fragility_summary, cascade_size
+from .metrics import fragility_index, fragility_summary, cascade_size, fragility_index_fast
 from .sensitivity import threshold_sensitivity, SensitivityPoint
 from .graph import (
     generate_erdos_renyi,
@@ -105,7 +105,7 @@ __all__ = [
     # Legacy — monte carlo
     "run_monte_carlo", "run_monte_carlo_all_seeds", "MonteCarloResult",
     # Legacy — metrics
-    "fragility_index", "fragility_summary", "cascade_size",
+    "fragility_index", "fragility_index_fast", "fragility_summary", "cascade_size",
     # Legacy — sensitivity
     "threshold_sensitivity", "SensitivityPoint",
     # Legacy — graph generators
