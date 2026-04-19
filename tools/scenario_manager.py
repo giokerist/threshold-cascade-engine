@@ -115,6 +115,11 @@ def _clamp_thresholds(cfg: dict) -> dict:
             t["deg_low"], t["deg_high"] = t["deg_high"], t["deg_low"]
         if t["fail_low"] > t["fail_high"]:
             t["fail_low"], t["fail_high"] = t["fail_high"], t["fail_low"]
+        # Enforce degradation ceiling <= failure floor
+        if t["deg_high"] > t["fail_low"]:
+            t["fail_low"] = t["deg_high"]
+            if t["fail_low"] > t["fail_high"]:
+                t["fail_high"] = t["fail_low"]
     elif t.get("type") == "normal":
         for key in ("deg_mean", "fail_mean"):
             if key in t:
@@ -220,6 +225,23 @@ def run_hardening_scenarios(
         One record per scenario: {label, config_path, results_dir, success}.
     """
     print(f"\n  [Scenario: Targeted Hardening] deltas={hardening_deltas}, top_k={top_k}")
+    
+    from cascade_engine.graph import graph_from_config
+    from cascade_engine.config import build_rng, generate_thresholds
+
+    # Resolve graph and rank nodes by in-degree
+    graph_cfg = base_cfg["graph"].copy()
+    if "seed" not in graph_cfg:
+        graph_cfg["seed"] = int(base_cfg["seed"])
+    A = graph_from_config(graph_cfg)
+    n = A.shape[0]
+    in_degree = A.sum(axis=0).astype(np.float64)
+    top_indeg_nodes = np.argsort(in_degree)[::-1][:top_k].tolist()
+
+    # Generate base thresholds
+    rng = build_rng(base_cfg)
+    base_t_deg, base_t_fail = generate_thresholds(n, base_cfg.get("thresholds", {}), rng)
+
     records = []
     hardening_dir = output_dir / "hardening"
 
@@ -229,15 +251,18 @@ def run_hardening_scenarios(
         config_path  = scenario_dir / "scenario_config.json"
 
         cfg = copy.deepcopy(base_cfg)
-        t = cfg["thresholds"]
+        
+        # Build custom threshold arrays by augmenting targeted nodes
+        t_deg_custom = base_t_deg.copy()
+        t_fail_custom = base_t_fail.copy()
+        for node in top_indeg_nodes:
+            t_fail_custom[node] = min(1.0, t_fail_custom[node] + delta)
 
-        if t.get("type") == "uniform":
-            t["fail_low"]  = t.get("fail_low",  0.5) + delta
-            t["fail_high"] = t.get("fail_high", 0.9) + delta
-        elif t.get("type") == "normal":
-            t["fail_mean"] = t.get("fail_mean", 0.65) + delta
-
-        cfg = _clamp_thresholds(cfg)
+        cfg["thresholds"] = {
+            "type": "custom",
+            "deg_array": t_deg_custom.tolist(),
+            "fail_array": t_fail_custom.tolist(),
+        }
 
         # Enable sensitivity to quantify cascade reduction vs. baseline
         cfg["sensitivity_analysis"] = True
@@ -260,7 +285,7 @@ def run_hardening_scenarios(
 
         scenario_dir.mkdir(parents=True, exist_ok=True)
         save_scenario_config(cfg, config_path)
-        print(f"  → {label}: fail_low={t.get('fail_low'):.3f}, fail_high={t.get('fail_high', 'N/A')}")
+        print(f"  → {label}: fail thresholds raised by {delta:.2f} for top-{top_k} nodes")
         success = run_engine(config_path, scenario_dir / "results")
 
         records.append({
