@@ -28,7 +28,7 @@ ConfigDict = dict[str, Any]
 # ---------------------------------------------------------------------------
 
 GRAPH_TYPES = {"erdos_renyi", "barabasi_albert", "watts_strogatz", "custom"}
-THRESHOLD_TYPES = {"uniform", "normal"}
+THRESHOLD_TYPES = {"uniform", "normal", "custom"}
 PROPAGATION_MODES = {"deterministic", "stochastic"}
 
 
@@ -173,6 +173,7 @@ def generate_thresholds(
         Threshold sub-config with keys ``type``, and distribution parameters.
         For ``uniform``: ``deg_low``, ``deg_high``, ``fail_low``, ``fail_high``.
         For ``normal``: ``deg_mean``, ``deg_std``, ``fail_mean``, ``fail_std``.
+        For ``custom``: ``deg_array``, ``fail_array`` (lists of length n).
     rng : Generator
         Seeded numpy random Generator for reproducibility.
 
@@ -214,6 +215,13 @@ def generate_thresholds(
             thresh_cfg.get("fail_std", 0.1),
             size=n,
         )
+    elif t == "custom":
+        if "deg_array" not in thresh_cfg or "fail_array" not in thresh_cfg:
+            raise ValueError("Custom thresholds require 'deg_array' and 'fail_array'.")
+        if len(thresh_cfg["deg_array"]) != n or len(thresh_cfg["fail_array"]) != n:
+            raise ValueError(f"Custom arrays must have length n={n}.")
+        theta_deg = np.array(thresh_cfg["deg_array"], dtype=np.float64)
+        theta_fail = np.array(thresh_cfg["fail_array"], dtype=np.float64)
     else:
         raise ValueError(f"Unsupported threshold type: {t!r}")
 
