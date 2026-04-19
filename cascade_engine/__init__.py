@@ -12,8 +12,18 @@ Supports two propagation modes:
       Logistic (sigmoid) failure probability with Monte Carlo wrapper.
       Per-trial RNG isolation via SeedSequence for statistical independence.
 
-Quick start
------------
+High-performance path (100K+ nodes / 1M+ edges)
+------------------------------------------------
+For large real-world graphs, use the fast sub-package:
+
+>>> from cascade_engine.ingestion import ingest_edgelist
+>>> from cascade_engine.graph_sparse import build_or_load_sparse_graph
+>>> from cascade_engine.propagation_fast import run_until_stable_fast
+>>> from cascade_engine.monte_carlo_parallel import run_monte_carlo_parallel
+>>> from cascade_engine.progress import print_callback
+
+Quick start (classic synthetic graphs)
+---------------------------------------
 >>> from cascade_engine.propagation import run_until_stable
 >>> from cascade_engine.graph import generate_erdos_renyi
 >>> import numpy as np
@@ -26,6 +36,9 @@ Quick start
 >>> final, steps, history, converged = run_until_stable(S0, A, theta_deg, theta_fail)
 """
 
+# ---------------------------------------------------------------------------
+# Legacy API (Tier 1 + Tier 2 — unchanged, backward compatible)
+# ---------------------------------------------------------------------------
 from .propagation import (
     run_until_stable,
     propagation_step,
@@ -40,7 +53,7 @@ from .stochastic_propagation import (
     sigmoid,
 )
 from .monte_carlo import run_monte_carlo, run_monte_carlo_all_seeds, MonteCarloResult
-from .metrics import fragility_index, fragility_summary, cascade_size
+from .metrics import fragility_index, fragility_summary, cascade_size, fragility_index_fast
 from .sensitivity import threshold_sensitivity, SensitivityPoint
 from .graph import (
     generate_erdos_renyi,
@@ -50,21 +63,69 @@ from .graph import (
 )
 from .utils import confidence_interval, make_trial_rngs, make_node_trial_rngs
 
+# ---------------------------------------------------------------------------
+# High-performance API (sparse engine — new in this refactor)
+# ---------------------------------------------------------------------------
+from .ingestion import ingest_edgelist, IngestResult, save_lookup_table, load_lookup_table
+from .graph_sparse import (
+    build_sparse_graph,
+    build_or_load_sparse_graph,
+    sparse_from_dense,
+    cache_sparse_graph,
+    load_sparse_graph,
+    graph_info,
+)
+from .propagation_fast import (
+    run_until_stable_fast,
+    propagation_step_fast,
+    propagation_step_sparse,
+)
+from .monte_carlo_parallel import (
+    run_monte_carlo_parallel,
+    run_monte_carlo_all_seeds_parallel,
+)
+from .progress import (
+    ProgressTracker,
+    ProgressCallback,
+    MultiprocessingProgressProxy,
+    ProgressListener,
+    null_callback,
+    print_callback,
+    make_tqdm_callback,
+)
+
 __all__ = [
-    # propagation
+    # ------------------------------------------------------------------ #
+    # Legacy — propagation                                                 #
+    # ------------------------------------------------------------------ #
     "run_until_stable", "propagation_step", "MonotonicityViolation",
     "STATE_OPERATIONAL", "STATE_DEGRADED", "STATE_FAILED",
-    # stochastic propagation
+    # Legacy — stochastic
     "run_until_stable_stochastic", "propagation_step_stochastic", "sigmoid",
-    # monte carlo
+    # Legacy — monte carlo
     "run_monte_carlo", "run_monte_carlo_all_seeds", "MonteCarloResult",
-    # metrics
-    "fragility_index", "fragility_summary", "cascade_size",
-    # sensitivity
+    # Legacy — metrics
+    "fragility_index", "fragility_index_fast", "fragility_summary", "cascade_size",
+    # Legacy — sensitivity
     "threshold_sensitivity", "SensitivityPoint",
-    # graph
+    # Legacy — graph generators
     "generate_erdos_renyi", "generate_barabasi_albert",
     "generate_watts_strogatz", "generate_custom",
-    # utils
+    # Legacy — utils
     "confidence_interval", "make_trial_rngs", "make_node_trial_rngs",
+    # ------------------------------------------------------------------ #
+    # High-performance sparse engine                                       #
+    # ------------------------------------------------------------------ #
+    # Ingestion
+    "ingest_edgelist", "IngestResult", "save_lookup_table", "load_lookup_table",
+    # Sparse graph
+    "build_sparse_graph", "build_or_load_sparse_graph", "sparse_from_dense",
+    "cache_sparse_graph", "load_sparse_graph", "graph_info",
+    # Fast propagation
+    "run_until_stable_fast", "propagation_step_fast", "propagation_step_sparse",
+    # Parallel Monte Carlo
+    "run_monte_carlo_parallel", "run_monte_carlo_all_seeds_parallel",
+    # Progress
+    "ProgressTracker", "ProgressCallback", "MultiprocessingProgressProxy",
+    "ProgressListener", "null_callback", "print_callback", "make_tqdm_callback",
 ]
