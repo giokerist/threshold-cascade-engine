@@ -203,25 +203,29 @@ def _run_stochastic_sparse(
     return S_cur, last_change
 
 
-def _run_mc_batch(
-    args: Tuple[int, List[int]]
-) -> List[Tuple[float, int]]:
-    """Worker task: run a batch of Monte Carlo trials for a fixed seed_node.
+def _run_node_trials(
+    args: Tuple[int, int, int]
+) -> Tuple[int, List[Tuple[float, int]]]:
+    """Worker task: run all Monte Carlo trials for one node.
+
+    Takes three plain integers — no list of seeds, no large pickled payload.
+    The worker generates its own per-trial RNGs from ``node_seed`` via
+    SeedSequence, keeping all seed arithmetic inside the worker process.
 
     Parameters
     ----------
-    args : (seed_node, seeds)
-        * ``seed_node`` — index of the node seeded as STATE_FAILED at t=0.
-        * ``seeds``     — list of integer seeds, one per trial in this batch.
-                          Each seed is used to initialise a ``default_rng``
-                          derived from the master SeedSequence hierarchy.
+    args : (node_idx, node_seed, trials)
+        * ``node_idx``  — index of the node seeded as STATE_FAILED at t=0.
+        * ``node_seed`` — integer seed for this node's SeedSequence.
+        * ``trials``    — number of independent trials to run.
 
     Returns
     -------
-    list of (cascade_size_fraction, time_to_stability)
-        One tuple per trial.
+    (node_idx, results)
+        ``results`` is a list of ``(cascade_size_fraction, time_to_stability)``
+        tuples, one per trial.
     """
-    seed_node, seeds = args
+    node_idx, node_seed, trials = args
     g = _WORKER
     n: int = g["n"]
     A_T: csr_matrix = g["A_T"]
@@ -232,14 +236,16 @@ def _run_mc_batch(
     max_steps: int = g["max_steps"]
     css: int = g["css"]
 
+    # Generate per-trial RNGs locally — avoids pickling a list of seeds
+    ss = SeedSequence(node_seed)
+    trial_rngs = [default_rng(child) for child in ss.spawn(trials)]
+
     S0 = np.zeros(n, dtype=np.int32)
-    S0[seed_node] = 2   # STATE_FAILED
+    S0[node_idx] = 2   # STATE_FAILED
 
     STATE_DEGRADED_LOCAL = 1
-
     results: List[Tuple[float, int]] = []
-    for seed in seeds:
-        rng = default_rng(seed)
+    for rng in trial_rngs:
         final_state, t_stable = _run_stochastic_sparse(
             S0, A_T, in_degree, theta_deg, theta_fail,
             k=k, rng=rng,
@@ -249,7 +255,7 @@ def _run_mc_batch(
         affected = int(np.sum(final_state >= STATE_DEGRADED_LOCAL))
         results.append((float(affected) / n, int(t_stable)))
 
-    return results
+    return node_idx, results
 
 
 # ---------------------------------------------------------------------------
@@ -495,36 +501,115 @@ def run_monte_carlo_all_seeds_parallel(
     cb = progress_callback or null_callback
     results: list = []
 
-    # Use a two-level SeedSequence for node × trial independence
+    # ------------------------------------------------------------------
+    # 1. Derive one integer seed per node — O(n) SeedSequence ops, fast.
+    #    Per-trial seeds are generated inside each worker, not here.
+    # ------------------------------------------------------------------
     root_ss = SeedSequence(seed)
-    node_master_seeds: list[int] = [
+    node_seeds: list[int] = [
         int(child.generate_state(1, dtype=np.uint64)[0])
         for child in root_ss.spawn(n)
     ]
 
-    for node_idx in range(n):
-        pct_start = 100.0 * node_idx / n
-        pct_end = 100.0 * (node_idx + 1) / n
+    # ------------------------------------------------------------------
+    # 2. One task per node — payload is three plain ints, trivial to pickle.
+    #    Total tasks = n (not n × n_workers), submission is instantaneous.
+    # ------------------------------------------------------------------
+    if max_steps is None:
+        max_steps = 4 * n
 
-        def _node_cb(pct: float, msg: str) -> None:
-            overall = pct_start + (pct / 100.0) * (pct_end - pct_start)
-            cb(overall, f"Node {node_idx}/{n - 1}: {msg}")
+    task_args = [(node_idx, node_seeds[node_idx], trials) for node_idx in range(n)]
+    total_tasks = n
+    cb(0.0, f"Submitting {total_tasks:,} node tasks across {n_workers} workers…")
 
-        result = run_monte_carlo_parallel(
-            A_T, in_degree, theta_deg, theta_fail,
-            seed_node=node_idx,
-            trials=trials,
-            seed=node_master_seeds[node_idx],
-            k=k,
-            max_steps=max_steps,
-            consecutive_stable_steps=consecutive_stable_steps,
-            n_workers=n_workers,
-            progress_callback=_node_cb,
-        )
-        results.append(result)
+    # ------------------------------------------------------------------
+    # 3. Prepare CSR raw arrays for the pool initializer (sent once)
+    # ------------------------------------------------------------------
+    at_data    = A_T.data.astype(np.float32)
+    at_indices = A_T.indices.astype(np.int32)
+    at_indptr  = A_T.indptr.astype(np.int32)
+    D          = in_degree.astype(np.float64)
+    t_deg      = theta_deg.astype(np.float64)
+    t_fail     = theta_fail.astype(np.float64)
+
+    init_args = (
+        at_data, at_indices, at_indptr,
+        D, t_deg, t_fail,
+        n, float(k), int(max_steps), int(consecutive_stable_steps),
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Single pool — all node tasks submitted at once, collected as done
+    # ------------------------------------------------------------------
+    raw_results: list[list[tuple[float, int]]] = [[] for _ in range(n)]
+    completed = 0
+    _ctx = _get_mp_context()
+
+    if n_workers == 1:
+        _worker_init(*init_args)
+        for args in task_args:
+            node_idx, node_results = _run_node_trials(args)
+            raw_results[node_idx].extend(node_results)
+            completed += 1
+            pct = 100.0 * completed / total_tasks
+            cb(pct, f"Node {completed:,}/{n:,} — {pct:.1f}% complete")
+    else:
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            mp_context=_ctx,
+            initializer=_worker_init,
+            initargs=init_args,
+        ) as pool:
+            future_to_node = {
+                pool.submit(_run_node_trials, args): args[0]
+                for args in task_args
+            }
+            for future in as_completed(future_to_node):
+                try:
+                    node_idx, node_results = future.result()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Worker failed on node {future_to_node[future]}: {exc}"
+                    ) from exc
+                raw_results[node_idx].extend(node_results)
+                completed += 1
+                pct = 100.0 * completed / total_tasks
+                cb(
+                    pct,
+                    f"Node {completed:,}/{n:,} — {pct:.1f}% complete",
+                )
 
     cb(100.0, "All-seeds Monte Carlo complete")
-    return results
+
+    # ------------------------------------------------------------------
+    # 5. Assemble one MonteCarloResult per node
+    # ------------------------------------------------------------------
+    mc_results: list = []
+    for node_idx in range(n):
+        pairs = raw_results[node_idx]
+        cascade_sizes = np.array([p[0] for p in pairs], dtype=np.float64)
+        times         = np.array([p[1] for p in pairs], dtype=np.int64)
+        mean_cs = float(np.mean(cascade_sizes))
+        var_cs  = float(np.var(cascade_sizes, ddof=1)) if len(cascade_sizes) > 1 else 0.0
+        ci_low, ci_high = (
+            confidence_interval(cascade_sizes)
+            if len(cascade_sizes) >= 2 else (mean_cs, mean_cs)
+        )
+        mc_results.append(MonteCarloResult(
+            cascade_sizes=cascade_sizes,
+            times_to_stability=times,
+            mean_cascade_size=mean_cs,
+            variance_cascade_size=var_cs,
+            ci_low=ci_low,
+            ci_high=ci_high,
+            trials=len(pairs),
+            seed=seed,
+            n_nodes=n,
+            k=k,
+            consecutive_stable_steps=consecutive_stable_steps,
+        ))
+
+    return mc_results
 
 
 # ---------------------------------------------------------------------------
