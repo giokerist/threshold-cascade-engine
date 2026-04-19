@@ -38,8 +38,12 @@ def run_k_sweep():
             proc = subprocess.run(cmd, capture_output=True, text=True)
             if proc.returncode != 0:
                 print(f"  [WARNING] subprocess failed for k={k} (exit {proc.returncode}):")
-                for line in proc.stderr.strip().splitlines()[-5:]:
-                    print(f"    {line}")
+                if proc.stderr:
+                    for line in proc.stderr.strip().splitlines()[-5:]:
+                        print(f"    {line}")
+                results.append((k, float('nan'), float('nan')))
+                print(f"{k:<10} | {'FAILED':<15} | {'FAILED':<10}")
+                continue
 
             summary_path = os.path.join(output_dir, "summary.json")
             try:
