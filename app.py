@@ -39,7 +39,7 @@ from cascade_engine.config import build_rng, generate_thresholds
 from cascade_engine.graph_sparse import build_or_load_sparse_graph
 from cascade_engine.ingestion import _compute_edge_hash
 from cascade_engine.propagation_fast import run_until_stable_fast
-from cascade_engine.metrics import fragility_summary, cascade_size, fragility_index_fast
+from cascade_engine.metrics import fragility_summary, cascade_size, fragility_index_fast, rmse, mape, spearman_correlation
 from cascade_engine.progress import ProgressTracker
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -500,14 +500,172 @@ def _run_simulation(
         )
 
     else:
-        # Stochastic mode: build a dense matrix only if n is small enough,
-        # otherwise warn and fall back to the parallel sparse Monte Carlo path.
-        progress_cb(0.55)
-        status_cb(f"Running stochastic propagation on {n:,} nodes…")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            A, theta_deg_d, theta_fail_d, in_degree_d = _build_experiment(cfg)
-        _run_stochastic(cfg, A, theta_deg_d, theta_fail_d, in_degree_d, OUTPUT_DIR)
+        # ── Stochastic mode — sparse fast path ───────────────────────────────
+        import json as _json
+        from cascade_engine.monte_carlo_parallel import run_monte_carlo_all_seeds_parallel
+        from cascade_engine.metrics import rmse, mape, spearman_correlation
+        from cascade_engine.propagation import STATE_FAILED as _SF
+
+        trials: int = int(cfg.get("monte_carlo_trials", 50))
+        k: float    = float(cfg.get("stochastic_k", 10.0))
+        master_seed: int = int(cfg["seed"])
+
+        status_cb(
+            f"Stochastic mode — {n:,} nodes × {trials} trials "
+            f"(k={k}) across 4 CPU cores…"
+        )
+        progress_cb(0.56)
+
+        # ── Phase A: Monte Carlo (all seed nodes, parallel) ──────────────────
+        # Progress slice: 0.56 → 0.80
+        _MC_START, _MC_END = 0.56, 0.80
+
+        def _mc_progress(pct: float, msg: str) -> None:
+            overall = _MC_START + (pct / 100.0) * (_MC_END - _MC_START)
+            progress_cb(overall)
+            if msg:
+                status_cb(f"Monte Carlo: {msg}")
+
+        t0 = _time.perf_counter()
+        mc_results = run_monte_carlo_all_seeds_parallel(
+            A_T, in_degree, theta_deg, theta_fail,
+            trials=trials,
+            seed=master_seed,
+            k=k,
+            n_workers=4,
+            progress_callback=_mc_progress,
+        )
+        elapsed_mc = _time.perf_counter() - t0
+        status_cb(
+            f"Monte Carlo done in {elapsed_mc:.1f}s "
+            f"({n * trials:,} total trials)."
+        )
+        progress_cb(_MC_END)
+
+        # ── Phase B: Deterministic fragility index for comparison ─────────────
+        # Progress slice: 0.80 → 0.92
+        _DET_START, _DET_END = 0.80, 0.92
+
+        status_cb(
+            f"Computing deterministic fragility index for comparison "
+            f"({n:,} nodes)…"
+        )
+
+        def _fi_progress(done: int) -> None:
+            frac = done / max(n - 1, 1)
+            progress_cb(_DET_START + frac * (_DET_END - _DET_START))
+
+        def _fi_status(msg: str) -> None:
+            status_cb(msg)
+
+        t1 = _time.perf_counter()
+        fi_det, _ = fragility_index_fast(
+            A_T, in_degree, theta_deg, theta_fail,
+            progress_cb=_fi_progress,
+            status_cb=_fi_status,
+            step=max(1, n // 20),
+        )
+        elapsed_det = _time.perf_counter() - t1
+        status_cb(f"Deterministic fragility done in {elapsed_det:.1f}s.")
+        progress_cb(_DET_END)
+
+        # ── Phase C: Aggregate results & write output files ───────────────────
+        progress_cb(0.92)
+        status_cb("Aggregating results and writing output files…")
+
+        mc_mean_cs = np.array([r.mean_cascade_size       for r in mc_results])
+        mc_ci_low  = np.array([r.ci_low                  for r in mc_results])
+        mc_ci_high = np.array([r.ci_high                 for r in mc_results])
+        mc_var     = np.array([r.variance_cascade_size    for r in mc_results])
+        fi_det_frac = fi_det / n
+
+        rmse_val  = rmse(fi_det_frac, mc_mean_cs)
+        mape_val  = mape(fi_det_frac, mc_mean_cs)
+        spearman  = spearman_correlation(fi_det_frac, mc_mean_cs)
+
+        _ensure_dir(OUTPUT_DIR)
+
+        # fragility_results.csv
+        _write_csv(
+            OUTPUT_DIR / "fragility_results.csv",
+            [
+                "node_id", "det_fragility_index", "det_fragility_frac",
+                "stochastic_mean_cascade", "stochastic_variance",
+                "ci_95_low", "ci_95_high",
+                "theta_deg", "theta_fail", "in_degree",
+            ],
+            [
+                {
+                    "node_id": i,
+                    "det_fragility_index": int(fi_det[i]),
+                    "det_fragility_frac": float(fi_det_frac[i]),
+                    "stochastic_mean_cascade": float(mc_mean_cs[i]),
+                    "stochastic_variance": float(mc_var[i]),
+                    "ci_95_low": float(mc_ci_low[i]),
+                    "ci_95_high": float(mc_ci_high[i]),
+                    "theta_deg": float(theta_deg[i]),
+                    "theta_fail": float(theta_fail[i]),
+                    "in_degree": int(in_degree[i]),
+                }
+                for i in range(n)
+            ],
+        )
+
+        # monte_carlo_distribution.csv (raw trial-level)
+        mc_rows = []
+        for i, r in enumerate(mc_results):
+            for trial_idx, (cs, ts) in enumerate(
+                zip(r.cascade_sizes.tolist(), r.times_to_stability.tolist())
+            ):
+                mc_rows.append({
+                    "node_id": i,
+                    "trial": trial_idx,
+                    "cascade_size_frac": round(float(cs), 6),
+                    "time_to_stability": int(ts),
+                })
+        _write_csv(
+            OUTPUT_DIR / "monte_carlo_distribution.csv",
+            ["node_id", "trial", "cascade_size_frac", "time_to_stability"],
+            mc_rows,
+        )
+
+        # results_summary.csv + summary.json
+        def _nan_to_none(v):
+            try:
+                return None if (isinstance(v, float) and __import__("math").isnan(v)) else v
+            except TypeError:
+                return v
+
+        summary_kv = {
+            "mode": "stochastic",
+            "n_nodes": n,
+            "monte_carlo_trials": trials,
+            "stochastic_k": k,
+            "elapsed_monte_carlo_s": round(elapsed_mc, 4),
+            "elapsed_det_fragility_s": round(elapsed_det, 4),
+            "rmse_det_vs_stochastic": round(rmse_val, 6),
+            "mape_det_vs_stochastic_pct": round(mape_val, 4),
+            "spearman_rho": round(spearman["rho"], 6),
+            "spearman_p_value": round(spearman["p_value"], 6),
+            "stochastic_mean_cascade_mean": round(float(np.mean(mc_mean_cs)), 4),
+            "stochastic_mean_cascade_std":  round(float(np.std(mc_mean_cs)), 4),
+        }
+        _write_csv(
+            OUTPUT_DIR / "results_summary.csv",
+            ["metric", "value"],
+            [{"metric": k_key, "value": v} for k_key, v in summary_kv.items()],
+        )
+        (OUTPUT_DIR / "summary.json").write_text(
+            _json.dumps(
+                {k_key: _nan_to_none(v) for k_key, v in summary_kv.items()},
+                indent=2,
+            )
+        )
+        status_cb(
+            f"Stochastic run complete — "
+            f"mean cascade size: {float(np.mean(mc_mean_cs)):.4f}, "
+            f"RMSE vs det: {rmse_val:.4f}."
+        )
 
     progress_cb(0.95)
     return OUTPUT_DIR
