@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import time
 import warnings
@@ -432,19 +433,22 @@ def _run_simulation(
         top_indeg_nodes = np.argsort(in_degree)[::-1][:5].tolist()
         topk_seed_nodes = list(dict.fromkeys(top_fi_nodes + top_indeg_nodes))
 
-        # fragility_index_fast already ran all-nodes; grab topk from fi_arr
+        # fragility_index_fast already ran all-nodes; rerun top-k to get detailed state breakdown
         topk_out = []
+        from cascade_engine.propagation import STATE_FAILED
         for sn in topk_seed_nodes:
-            n_aff = int(fi_arr[sn])
-            frac_aff = float(n_aff / n) if n > 0 else 0.0
+            S0 = np.zeros(n, dtype=np.int32)
+            S0[sn] = STATE_FAILED
+            final, _, _, _ = run_until_stable_fast(S0, A_T, in_degree, theta_deg, theta_fail)
+            cs = cascade_size(final)
             topk_out.append({
                 "seed_node": sn,
-                "fragility_index": n_aff,
+                "fragility_index": int(fi_arr[sn]),
                 "in_degree": int(in_degree[sn]),
-                "n_affected": n_aff,
-                "frac_affected": round(frac_aff, 4),
-                "n_failed": None,
-                "n_degraded": None,
+                "n_affected": cs["n_affected"],
+                "frac_affected": round(cs["frac_affected"], 4),
+                "n_failed": cs["n_failed"],
+                "n_degraded": cs["n_degraded"],
             })
 
         highest_fi_node = top_fi_nodes[0]
@@ -512,7 +516,6 @@ def _run_simulation(
         stoch_k: float = float(cfg.get("stochastic_k", 10.0))
         master_seed: int = int(cfg["seed"])
 
-        import os
         n_workers = min(4, os.cpu_count() or 1)
 
         status_cb(
@@ -1001,7 +1004,7 @@ if st.session_state.sim_ran:
     _metric(m1, "Total Nodes",  f"{graph_stats.get('n_nodes', '—'):,}", "")
     _metric(m2, "Total Edges",  f"{graph_stats.get('n_edges', '—'):,}", "directed")
     _metric(m3, "Mode",         mode.capitalize(), "propagation")
-    elapsed_s = getattr(st.session_state, "sim_elapsed", 0)
+    elapsed_s = st.session_state.get("sim_elapsed", 0)
     _metric(m4, "Elapsed",      f"{elapsed_s:.2f}", "seconds")
 
     st.markdown("---")
