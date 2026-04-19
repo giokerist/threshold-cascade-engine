@@ -237,9 +237,9 @@ _ensure_dir(OUTPUT_DIR)
 def _read_headers(uploaded_file) -> list[str]:
     """Read only the first row of the uploaded CSV to extract column names."""
     uploaded_file.seek(0)
-    first_chunk = io.StringIO(uploaded_file.read(8192).decode("utf-8", errors="replace"))
+    first_line = uploaded_file.readline().decode("utf-8", errors="replace")
     uploaded_file.seek(0)
-    df = pd.read_csv(first_chunk, nrows=0)
+    df = pd.read_csv(io.StringIO(first_line + "\n"), nrows=0)
     return list(df.columns)
 
 
@@ -407,6 +407,9 @@ def _run_simulation(
     # ── 3. Run simulation ─────────────────────────────────────────────────────
     progress_cb(0.55)
 
+    from cascade_engine.propagation_fast import _warmup_thread
+    _warmup_thread.join(timeout=5.0)
+
     if mode == "deterministic":
         status_cb(f"Computing fragility index for {n:,} nodes (sparse engine)…")
         t0 = _time.perf_counter()
@@ -432,18 +435,16 @@ def _run_simulation(
         # fragility_index_fast already ran all-nodes; grab topk from fi_arr
         topk_out = []
         for sn in topk_seed_nodes:
-            S0 = np.zeros(n, dtype=np.int32)
-            S0[sn] = STATE_FAILED
-            final, _, _, _ = run_until_stable_fast(S0, A_T, in_degree, theta_deg, theta_fail)
-            cs = cascade_size(final)
+            n_aff = int(fi_arr[sn])
+            frac_aff = float(n_aff / n) if n > 0 else 0.0
             topk_out.append({
                 "seed_node": sn,
-                "fragility_index": int(fi_arr[sn]),
+                "fragility_index": n_aff,
                 "in_degree": int(in_degree[sn]),
-                "n_affected": cs["n_affected"],
-                "frac_affected": round(cs["frac_affected"], 4),
-                "n_failed": cs["n_failed"],
-                "n_degraded": cs["n_degraded"],
+                "n_affected": n_aff,
+                "frac_affected": round(frac_aff, 4),
+                "n_failed": None,
+                "n_degraded": None,
             })
 
         highest_fi_node = top_fi_nodes[0]
@@ -508,12 +509,15 @@ def _run_simulation(
         from cascade_engine.propagation import STATE_FAILED as _SF
 
         trials: int = int(cfg.get("monte_carlo_trials", 50))
-        k: float    = float(cfg.get("stochastic_k", 10.0))
+        stoch_k: float = float(cfg.get("stochastic_k", 10.0))
         master_seed: int = int(cfg["seed"])
+
+        import os
+        n_workers = min(4, os.cpu_count() or 1)
 
         status_cb(
             f"Stochastic mode — {n:,} nodes × {trials} trials "
-            f"(k={k}) across 4 CPU cores…"
+            f"(k={stoch_k}) across {n_workers} CPU cores…"
         )
         progress_cb(0.56)
 
@@ -532,8 +536,8 @@ def _run_simulation(
             A_T, in_degree, theta_deg, theta_fail,
             trials=trials,
             seed=master_seed,
-            k=k,
-            n_workers=4,
+            k=stoch_k,
+            n_workers=n_workers,
             progress_callback=_mc_progress,
         )
         elapsed_mc = _time.perf_counter() - t0
@@ -641,7 +645,7 @@ def _run_simulation(
             "mode": "stochastic",
             "n_nodes": n,
             "monte_carlo_trials": trials,
-            "stochastic_k": k,
+            "stochastic_k": stoch_k,
             "elapsed_monte_carlo_s": round(elapsed_mc, 4),
             "elapsed_det_fragility_s": round(elapsed_det, 4),
             "rmse_det_vs_stochastic": round(rmse_val, 6),
@@ -654,7 +658,7 @@ def _run_simulation(
         _write_csv(
             OUTPUT_DIR / "results_summary.csv",
             ["metric", "value"],
-            [{"metric": k_key, "value": v} for k_key, v in summary_kv.items()],
+            [{"metric": k, "value": v} for k, v in summary_kv.items()],
         )
         (OUTPUT_DIR / "summary.json").write_text(
             _json.dumps(
@@ -728,7 +732,7 @@ with st.sidebar:
         found = []
         for hint in hints:
             for h in headers:
-                if hint.lower() in h.lower() and h not in found:
+                if h.lower().startswith(hint.lower()) and h not in found:
                     found.append(h)
                     break
         return found or (headers[:1] if headers else [])
@@ -945,7 +949,7 @@ if run_btn:
         st.session_state.output_dir = str(OUTPUT_DIR)
         st.session_state.sim_ran = True
         st.session_state.run_error = None
-        st.session_state._elapsed = elapsed
+        st.session_state.sim_elapsed = elapsed
 
         progress(1.0)
         status_box.markdown(
@@ -997,7 +1001,7 @@ if st.session_state.sim_ran:
     _metric(m1, "Total Nodes",  f"{graph_stats.get('n_nodes', '—'):,}", "")
     _metric(m2, "Total Edges",  f"{graph_stats.get('n_edges', '—'):,}", "directed")
     _metric(m3, "Mode",         mode.capitalize(), "propagation")
-    elapsed_s = getattr(st.session_state, "_elapsed", 0)
+    elapsed_s = getattr(st.session_state, "sim_elapsed", 0)
     _metric(m4, "Elapsed",      f"{elapsed_s:.2f}", "seconds")
 
     st.markdown("---")
