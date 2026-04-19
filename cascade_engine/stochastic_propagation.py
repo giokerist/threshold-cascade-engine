@@ -154,6 +154,9 @@ def propagation_step_stochastic(
     # ---- Build candidate new state vector ----------------------------------
     new_state = np.full(S.shape[0], STATE_OPERATIONAL, dtype=np.int32)
     new_state = np.where(will_degrade, STATE_DEGRADED, new_state)
+    # Note: If will_fail is True but will_degrade is False, the node transitions 
+    # directly from OPERATIONAL to FAILED, bypassing DEGRADED entirely. This is 
+    # intended for low k values where probability distributions overlap.
     new_state = np.where(will_fail, STATE_FAILED, new_state)
 
     # ---- Enforce monotonicity ----------------------------------------------
@@ -264,17 +267,18 @@ def run_until_stable_stochastic(
                 f"for nodes: {violators}"
             )
 
+        history.append(S_next.copy())
+
         if np.array_equal(S_next, S_current):
-            # Quiet step -- count but do not append duplicate to history
+            # Quiet step -- count
             quiet_count += 1
             if quiet_count >= consecutive_stable_steps:
                 convergence_reached = True
                 break
         else:
-            # Active step -- record and reset quiet counter
+            # Active step -- record change and reset quiet counter
             quiet_count = 0
             last_change_step = step + 1
-            history.append(S_next.copy())
 
         S_current = S_next
 
@@ -287,7 +291,9 @@ def run_until_stable_stochastic(
             stacklevel=2,
         )
 
-    full_history = np.array(history, dtype=np.int32)
+    # Truncate history to exactly the steps up to last_change_step (plus S0)
+    # This precisely matches the deterministic engine's signature and semantics.
+    full_history = np.array(history[:last_change_step + 1], dtype=np.int32)
     time_to_stability = last_change_step
 
     return S_current, time_to_stability, full_history, convergence_reached
