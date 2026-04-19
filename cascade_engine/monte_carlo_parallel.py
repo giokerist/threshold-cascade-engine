@@ -15,14 +15,13 @@ Architecture
       │
       ├── build_or_load_sparse_graph(...)        ← one-time, cached
       │
-      ├── ProcessPoolExecutor (4 workers)
+      ├── ProcessPoolExecutor (n workers)
       │     ├── _worker_init(A_T_arrays, thresholds, …)  [one call per worker]
       │     │   └── stores graph arrays in module-level global (no re-pickle)
       │     │
-      │     ├── Worker 0: _run_mc_batch(seed_node, seeds[0:250], …)
-      │     ├── Worker 1: _run_mc_batch(seed_node, seeds[250:500], …)
-      │     ├── Worker 2: _run_mc_batch(seed_node, seeds[500:750], …)
-      │     └── Worker 3: _run_mc_batch(seed_node, seeds[750:1000], …)
+      │     ├── Worker 0: _run_mc_batch(seed_node, seeds[0:250])          # run_monte_carlo_parallel
+      │     ├── Worker 1: _run_node_trials(node_idx=3, node_seed, trials) # run_monte_carlo_all_seeds_parallel
+      │     └── ...
       │
       └── collects results + fires progress_callback
 
@@ -201,6 +200,52 @@ def _run_stochastic_sparse(
         S_cur = S_next
 
     return S_cur, last_change
+
+
+def _run_mc_batch(
+    args: Tuple[int, List[int]]
+) -> List[Tuple[float, int]]:
+    """Worker task: run a batch of seeds for a single seed node.
+
+    Parameters
+    ----------
+    args : (seed_node, seeds)
+        * ``seed_node`` — index of the node seeded as STATE_FAILED at t=0.
+        * ``seeds``     — list of integer seeds for per-trial RNGs.
+
+    Returns
+    -------
+    results : list of (cascade_size_fraction, time_to_stability)
+        One tuple per seed in the batch.
+    """
+    seed_node, seeds = args
+    g = _WORKER
+    n: int = g["n"]
+    A_T: csr_matrix = g["A_T"]
+    in_degree: np.ndarray = g["in_degree"]
+    theta_deg: np.ndarray = g["theta_deg"]
+    theta_fail: np.ndarray = g["theta_fail"]
+    k: float = g["k"]
+    max_steps: int = g["max_steps"]
+    css: int = g["css"]
+
+    S0 = np.zeros(n, dtype=np.int32)
+    S0[seed_node] = 2   # STATE_FAILED
+
+    STATE_DEGRADED_LOCAL = 1
+    results: List[Tuple[float, int]] = []
+    for seed in seeds:
+        rng = default_rng(seed)
+        final_state, t_stable = _run_stochastic_sparse(
+            S0, A_T, in_degree, theta_deg, theta_fail,
+            k=k, rng=rng,
+            max_steps=max_steps,
+            css=css,
+        )
+        affected = int(np.sum(final_state >= STATE_DEGRADED_LOCAL))
+        results.append((float(affected) / n, int(t_stable)))
+
+    return results
 
 
 def _run_node_trials(
