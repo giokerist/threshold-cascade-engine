@@ -384,9 +384,6 @@ def run_until_stable_fast(
                 f"Monotonicity violated at step {step + 1} for nodes: {violators}"
             )
 
-        pct = 100.0 * (step + 1) / max_steps
-        cb(pct, f"Step {step + 1} — nodes changed: {int(np.sum(S_next != S_current))}")
-
         history.append(S_next.copy())
 
         if np.array_equal(S_next, S_current):
@@ -394,6 +391,8 @@ def run_until_stable_fast(
             convergence_reached = True
             cb(100.0, f"Converged at step {step + 1}")
             break
+
+        cb(0.0, f"Step {step + 1} — nodes changed: {int(np.sum(S_next != S_current))}")
 
         last_change_step = step + 1
         S_current = S_next
