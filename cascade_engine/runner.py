@@ -132,7 +132,7 @@ def _build_experiment(
 
     A = graph_from_config(graph_cfg)
     n = A.shape[0]
-    in_degree = A.sum(axis=0).astype(np.int64)
+    in_degree = A.sum(axis=0).astype(np.float64)
 
     rng = build_rng(cfg)
     theta_deg, theta_fail = generate_thresholds(n, cfg["thresholds"], rng)
@@ -390,6 +390,7 @@ def _run_stochastic(
         "spearman_p_value": round(spearman["p_value"], 6),
         "stochastic_mean_cascade_mean": round(float(np.mean(mc_mean_cs)), 4),
         "stochastic_mean_cascade_std": round(float(np.std(mc_mean_cs)), 4),
+        "note_degradation_bypass": "Nodes may transition directly from OPERATIONAL to FAILED at low k (overlapping probability distributions).",
     }
     _write_csv(
         output_dir / "results_summary.csv",
