@@ -41,6 +41,7 @@ from cascade_engine.ingestion import _compute_edge_hash
 from cascade_engine.propagation_fast import run_until_stable_fast
 from cascade_engine.metrics import fragility_summary, cascade_size, fragility_index_fast, rmse, mape, spearman_correlation
 from cascade_engine.progress import ProgressTracker
+from validation_section import render_validation_section
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config (must be first Streamlit call)
@@ -1203,3 +1204,15 @@ if st.session_state.sim_ran:
                 mime="text/csv",
                 use_container_width=True,
             )
+
+    st.markdown("---")
+
+    # ── ⑥ Validation & Baseline Comparison ───────────────────────────────────
+    render_validation_section(
+        results_df=results_df,
+        summary=summary,
+        id_to_name=id_to_name,
+        graph_stats=graph_stats,
+        elapsed=elapsed_s,
+        dataset_name=getattr(uploaded_file, "name", "Uploaded Dataset"),
+    )
