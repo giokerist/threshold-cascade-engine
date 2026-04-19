@@ -27,7 +27,8 @@ The linear-algebra propagation formula
 ---------------------------------------
 The deterministic cascade rule is:
 
-    S_{t+1} = Φ( A_T · S_t^{fail} − Θ_fail )
+    F = (A_T · S_t^{fail}) / in_degree
+    S_{t+1} = Φ(F − Θ_fail)·2 + Φ(F − Θ_deg)·(1 − Φ(F − Θ_fail))
 
 Where:
   * ``A_T``          — CSR transpose of the adjacency matrix (row i = in-neighbours of i)
@@ -386,14 +387,15 @@ def run_until_stable_fast(
         pct = 100.0 * (step + 1) / max_steps
         cb(pct, f"Step {step + 1} — nodes changed: {int(np.sum(S_next != S_current))}")
 
+        history.append(S_next.copy())
+
         if np.array_equal(S_next, S_current):
-            history.pop() if len(history) > 1 else None
+            history.pop()
             convergence_reached = True
             cb(100.0, f"Converged at step {step + 1}")
             break
 
         last_change_step = step + 1
-        history.append(S_next.copy())
         S_current = S_next
 
     else:
