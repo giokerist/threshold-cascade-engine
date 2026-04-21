@@ -15,7 +15,6 @@ import json
 import os
 import sys
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -30,18 +29,15 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from cascade_engine.runner import (
-    _build_experiment,
-    _run_deterministic,
-    _run_stochastic,
     _ensure_dir,
     _write_csv,
 )
 from cascade_engine.config import build_rng, generate_thresholds
 from cascade_engine.graph_sparse import build_or_load_sparse_graph
 from cascade_engine.ingestion import _compute_edge_hash
+from cascade_engine.propagation import STATE_FAILED
 from cascade_engine.propagation_fast import run_until_stable_fast
 from cascade_engine.metrics import fragility_summary, cascade_size, fragility_index_fast, rmse, mape, spearman_correlation
-from cascade_engine.progress import ProgressTracker
 from validation_section import render_validation_section
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -380,13 +376,12 @@ def _run_simulation(
       3. Same output files as _run_deterministic / _run_stochastic
     """
     import json, time as _time
-    from cascade_engine.propagation import STATE_FAILED
 
     mode = cfg.get("propagation_mode", "deterministic")
     n = n_nodes
 
     # ── 1. Build sparse graph (load from cache if edges unchanged) ────────────
-    progress_cb(0.40)
+    progress_cb(0.40, "")
     status_cb("Building sparse CSR adjacency matrix…")
     edge_hash = _compute_edge_hash(src_ids, tgt_ids)
     A_T, in_degree = build_or_load_sparse_graph(
@@ -400,13 +395,13 @@ def _run_simulation(
     )
 
     # ── 2. Generate thresholds ────────────────────────────────────────────────
-    progress_cb(0.50)
+    progress_cb(0.50, "")
     status_cb("Generating threshold arrays…")
     rng = build_rng(cfg)
     theta_deg, theta_fail = generate_thresholds(n, cfg["thresholds"], rng)
 
     # ── 3. Run simulation ─────────────────────────────────────────────────────
-    progress_cb(0.55)
+    progress_cb(0.55, "")
 
     from cascade_engine.propagation_fast import _warmup_thread
     _warmup_thread.join(timeout=5.0)
@@ -435,7 +430,6 @@ def _run_simulation(
 
         # fragility_index_fast already ran all-nodes; rerun top-k to get detailed state breakdown
         topk_out = []
-        from cascade_engine.propagation import STATE_FAILED
         for sn in topk_seed_nodes:
             S0 = np.zeros(n, dtype=np.int32)
             S0[sn] = STATE_FAILED
@@ -509,8 +503,6 @@ def _run_simulation(
         # ── Stochastic mode — sparse fast path ───────────────────────────────
         import json as _json
         from cascade_engine.monte_carlo_parallel import run_monte_carlo_all_seeds_parallel
-        from cascade_engine.metrics import rmse, mape, spearman_correlation
-        from cascade_engine.propagation import STATE_FAILED as _SF
 
         trials: int = int(cfg.get("monte_carlo_trials", 50))
         stoch_k: float = float(cfg.get("stochastic_k", 10.0))
@@ -522,7 +514,7 @@ def _run_simulation(
             f"Stochastic mode — {n:,} nodes × {trials} trials "
             f"(k={stoch_k}) across {n_workers} CPU cores…"
         )
-        progress_cb(0.56)
+        progress_cb(0.56, "")
 
         # ── Phase A: Monte Carlo (all seed nodes, parallel) ──────────────────
         # Progress slice: 0.56 → 0.80
@@ -530,7 +522,7 @@ def _run_simulation(
 
         def _mc_progress(pct: float, msg: str) -> None:
             overall = _MC_START + (pct / 100.0) * (_MC_END - _MC_START)
-            progress_cb(overall)
+            progress_cb(overall, "")
             if msg:
                 status_cb(f"Monte Carlo: {msg}")
 
@@ -578,7 +570,7 @@ def _run_simulation(
         progress_cb(_DET_END)
 
         # ── Phase C: Aggregate results & write output files ───────────────────
-        progress_cb(0.92)
+        progress_cb(0.92, "")
         status_cb("Aggregating results and writing output files…")
 
         mc_mean_cs = np.array([r.mean_cascade_size       for r in mc_results])
@@ -675,7 +667,7 @@ def _run_simulation(
             f"RMSE vs det: {rmse_val:.4f}."
         )
 
-    progress_cb(0.95)
+    progress_cb(0.95, "")
     return OUTPUT_DIR
 
 
