@@ -214,8 +214,8 @@ def run_until_stable_stochastic(
     time_to_stability : int
         Step index of the last actual state change (0 if S0 already stable).
     full_state_history : np.ndarray, shape (T+1, n)
-        History of states at every step where a change occurred, plus S0.
-        Quiet-counting steps are not appended (no new information).
+        History of states from S0 up to last_change_step (inclusive).
+        Quiet-counting steps beyond last_change_step are not included.
     convergence_reached : bool
         True if stabilised before max_steps; False if truncated.
 
