@@ -64,7 +64,7 @@ Usage
 from __future__ import annotations
 
 import warnings
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -72,14 +72,13 @@ from scipy.sparse import csr_matrix
 # Lazy Numba import — if numba is not installed, fall back to pure numpy.
 try:
     import numba
-    from numba import njit, prange
+    from numba import prange
     _HAS_NUMBA = True
 except ImportError:
     _HAS_NUMBA = False
     numba = None  # type: ignore[assignment]
 
 from .propagation import (
-    STATE_OPERATIONAL,
     STATE_DEGRADED,
     STATE_FAILED,
     MonotonicityViolation,
@@ -460,8 +459,9 @@ def _warmup_numba() -> None:
 
 
 # Trigger Numba compilation at import time.
-# This runs in a background thread so it does not block the caller.
-import threading as _threading
-
-_warmup_thread = _threading.Thread(target=_warmup_numba, daemon=True, name="numba-warmup")
-_warmup_thread.start()
+# NOTE: Warmup is synchronous (not in a background thread) to avoid daemon thread
+# issues in multiprocessing contexts. In multiprocessing, daemon threads can die
+# mid-compilation during worker process teardown, silently leaving Numba uncompiled
+# and falling back to the slower NumPy path without warning.
+if _HAS_NUMBA:
+    _warmup_numba()
