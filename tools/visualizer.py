@@ -376,7 +376,7 @@ def plot_ghost_hub(
     fig, ax = plt.subplots(figsize=(11, 7), facecolor=BACKGROUND)
     ax.set_facecolor(BACKGROUND)
 
-    scatter = ax.scatter(
+    ax.scatter(
         id_vals, fi_vals,
         c=colors, s=sizes,
         alpha=0.80, edgecolors="white", linewidths=0.6, zorder=3,
