@@ -222,6 +222,15 @@ def generate_thresholds(
             raise ValueError(f"Custom arrays must have length n={n}.")
         theta_deg = np.array(thresh_cfg["deg_array"], dtype=np.float64)
         theta_fail = np.array(thresh_cfg["fail_array"], dtype=np.float64)
+        # Validate custom arrays for NaN and non-finite values before clipping.
+        for arr_name, arr in [("deg_array", theta_deg), ("fail_array", theta_fail)]:
+            if not np.all(np.isfinite(arr)):
+                bad_indices = np.where(~np.isfinite(arr))[0].tolist()
+                raise ValueError(
+                    f"Custom {arr_name} contains NaN or non-finite values at indices: "
+                    f"{bad_indices[:10]}{'...' if len(bad_indices) > 10 else ''}. "
+                    f"All threshold values must be finite."
+                )
     else:
         raise ValueError(f"Unsupported threshold type: {t!r}")
 
