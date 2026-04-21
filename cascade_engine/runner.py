@@ -28,7 +28,6 @@ import json
 import sys
 import math
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -464,9 +463,12 @@ def _run_sensitivity(
         seed_nodes = list(np.argsort(in_deg)[::-1][:max_seed_nodes].tolist())
 
     stochastic_trials: int = int(sens_cfg.get("stochastic_trials", 30))
-    # Use a well-separated seed for sensitivity so its SeedSequence tree is
-    # statistically independent from the Monte Carlo SeedSequence tree (F-006).
-    master_seed: int = int(cfg["seed"]) + 10_000_000
+    # Use SeedSequence.spawn() for statistical independence instead of
+    # integer offset anti-pattern (F-006).
+    from numpy.random import SeedSequence as _SeedSequence
+    _base_ss = _SeedSequence(int(cfg["seed"]))
+    _sensitivity_ss, = _base_ss.spawn(1)
+    master_seed: int = int(_sensitivity_ss.generate_state(1, dtype=np.uint64)[0])
 
     print(
         f"[Sensitivity] mode={mode} | {len(perturbations)} perturbations | "
