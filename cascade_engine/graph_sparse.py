@@ -47,13 +47,6 @@ from typing import Tuple
 import numpy as np
 from scipy.sparse import csr_matrix
 
-# Optional: joblib.Memory for function-level memoisation
-try:
-    from joblib import Memory as _JoblibMemory
-    _HAS_JOBLIB = True
-except ImportError:
-    _HAS_JOBLIB = False
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -322,7 +315,6 @@ def sparse_from_dense(A: np.ndarray) -> SparseGraphTuple:
     """
     from scipy.sparse import csr_matrix as _csr
 
-    n = A.shape[0]
     # A.T in CSR — row i = in-neighbours of i
     A_T = _csr(A.T.astype(np.float32))
     A_T.sort_indices()
