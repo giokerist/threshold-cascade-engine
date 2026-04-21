@@ -14,7 +14,6 @@ Covers:
 
 from __future__ import annotations
 
-import io
 import json
 import sys
 import tempfile
@@ -22,7 +21,6 @@ import unittest
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 # Ensure repo root is on sys.path
