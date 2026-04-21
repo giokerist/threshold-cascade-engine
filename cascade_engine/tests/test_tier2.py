@@ -31,7 +31,7 @@ from cascade_engine.stochastic_propagation import (
 from cascade_engine.monte_carlo import run_monte_carlo, confidence_interval
 from cascade_engine.sensitivity import threshold_sensitivity, sensitivity_aggregate_by_perturbation
 from cascade_engine.metrics import rmse, mape, spearman_correlation, confidence_interval as metrics_ci
-from cascade_engine.propagation import STATE_FAILED, STATE_DEGRADED, STATE_OPERATIONAL
+from cascade_engine.propagation import STATE_FAILED, STATE_OPERATIONAL
 from cascade_engine.graph import generate_custom
 
 
