@@ -403,9 +403,6 @@ def _run_simulation(
     # ── 3. Run simulation ─────────────────────────────────────────────────────
     progress_cb(0.55, "")
 
-    from cascade_engine.propagation_fast import _warmup_thread
-    _warmup_thread.join(timeout=5.0)
-
     if mode == "deterministic":
         status_cb(f"Computing fragility index for {n:,} nodes (sparse engine)…")
         t0 = _time.perf_counter()
@@ -886,7 +883,7 @@ if run_btn:
             unsafe_allow_html=True,
         )
 
-    def progress(v: float):
+    def progress(v: float, _msg: str = ""):
         progress_bar.progress(min(v, 1.0))
 
     try:
