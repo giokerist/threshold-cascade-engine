@@ -284,8 +284,12 @@ def ingest_edgelist(
         # unless a separate target_composite_cols arg is added in a future version.
         # Typical use: each row is an edge event; the composite key encodes the
         # *affected entity* (= target).  Use source_col for the upstream entity.
-        if source_col in df.columns:
-            _src_key_col = source_col
+        if source_col not in df.columns:
+            raise ValueError(
+                f"composite_cols mode requires source_col='{source_col}' to exist. "
+                f"Available columns: {df.columns.tolist()}"
+            )
+        _src_key_col = source_col
         _tgt_key_col = composite_key_col
     else:
         for col in (source_col, target_col):
