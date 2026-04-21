@@ -56,7 +56,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +648,7 @@ def main() -> None:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n  scenario_manager starting.")
+    print("\n  scenario_manager starting.")
     print(f"  Base config : {args.config}")
     print(f"  Output dir  : {output_dir}")
     print(f"  Scenarios   : {args.scenarios}")
