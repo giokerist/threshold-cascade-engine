@@ -56,10 +56,7 @@ Usage
 from __future__ import annotations
 
 import multiprocessing as _mp
-import os
-import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -67,7 +64,6 @@ from numpy.random import SeedSequence, default_rng
 from scipy.sparse import csr_matrix
 
 from .monte_carlo import MonteCarloResult
-from .propagation import STATE_DEGRADED
 from .utils import confidence_interval
 from .progress import ProgressCallback, null_callback
 
@@ -180,8 +176,6 @@ def _run_stochastic_sparse(
 
     Returns (final_state, time_to_stability).
     """
-    STATE_FAILED_LOCAL = 2
-    n = len(S0)
     S_cur = S0.copy()
     last_change = 0
     quiet = 0
@@ -544,7 +538,6 @@ def run_monte_carlo_all_seeds_parallel(
     """
     n = A_T.shape[0]
     cb = progress_callback or null_callback
-    results: list = []
 
     # ------------------------------------------------------------------
     # 1. Derive one integer seed per node — O(n) SeedSequence ops, fast.
