@@ -193,9 +193,14 @@ def fragility_index_fast(
 
         if i % step == 0:
             if progress_cb is not None:
-                progress_cb(i)
+                progress_cb(i + 1)
             if status_cb is not None:
-                status_cb(f"Fragility index: {i:,} / {n:,} nodes processed…")
+                status_cb(f"Fragility index: {i + 1:,} / {n:,} nodes processed…")
+
+    if progress_cb is not None:
+        progress_cb(n)
+    if status_cb is not None:
+        status_cb(f"Fragility index: {n:,} / {n:,} nodes processed…")
 
     return fi, []
 
